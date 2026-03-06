@@ -493,6 +493,9 @@ setInterval(async () => {
         // Update chart position lines dynamically
         updatePositionLines(d.position);
 
+        // Refresh candle data every cycle
+        await refreshCandles();
+
     } catch(e) { console.error('refresh error', e); }
 }, 30000);
 
@@ -641,20 +644,11 @@ document.getElementById('tfPills').addEventListener('click', async (e) => {
     document.querySelectorAll('.tf-pill').forEach(p => p.classList.remove('active'));
     pill.classList.add('active');
     currentTF = tf;
-    try {
-        const r = await fetch('/api/candles?count=120&tf=' + tf);
-        const data = await r.json();
-        if (data.length > 0) {
-            candleData.length = 0;
-            data.forEach(c => candleData.push(c));
-            candleSeries.setData(toLocal(candleData));
-            updateChartInfo();
-        }
-    } catch(e) { console.error('TF switch error', e); }
+    await refreshCandles();
 });
 
-// Refresh candle chart every 5 minutes
-setInterval(async () => {
+// Shared candle refresh — called by 30s auto-refresh and TF switch
+async function refreshCandles() {
     try {
         const r = await fetch('/api/candles?count=120&tf=' + currentTF);
         const data = await r.json();
@@ -662,10 +656,11 @@ setInterval(async () => {
             candleData.length = 0;
             data.forEach(c => candleData.push(c));
             candleSeries.setData(toLocal(candleData));
+            markerSeries.setData(toLocal(candleData).map(c => ({time: c.time, value: c.close})));
             updateChartInfo();
         }
     } catch(e) {}
-}, 300000);
+}
 
 // Equity Chart
 function drawChart() {
