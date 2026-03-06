@@ -1,0 +1,43 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+nul
+
+# Data files (large, not for version control)
+*.db
+data/raw/
+
+# Test trade logs
+trades_log*.csv
+trades_v*.csv
+
+# Reports (generated — regenerate via scripts/)
+reports/*.html
+
+# Environment / secrets
+.env
+.env.*
+
+# Claude Code
+.claude/
+
+# Distribution
+dist/
+build/
+*.egg-info/

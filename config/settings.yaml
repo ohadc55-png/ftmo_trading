@@ -1,0 +1,48 @@
+ticker: "NQ=F"
+timezone: "America/New_York"
+base_timeframe: "5m"           # M1 for live, M5 for yfinance backtesting
+mtf_timeframes: ["15min", "1h"]
+
+engines:
+  mtf_trend:
+    ema_fast: 9
+    ema_mid: 21
+    ema_slow: 50
+    swing_lookback: 5
+
+  volume:
+    ma_period: 20
+    surge_mult: 1.5
+
+  key_levels:
+    breakout_buffer_points: 5
+    premarket_start_hour: 1
+    premarket_end_hour: 9
+
+  vwap:
+    rth_start_hour: 9
+    rth_start_minute: 30
+    overextended_pct: 0.5
+
+scoring:
+  weight_mtf_trend: 3
+  weight_volume: 2
+  weight_breakout: 3
+  weight_vwap: 2
+  min_score_threshold: 7.5
+  # BUY overrides: more key levels, less volume
+  buy_weight_mtf_trend: 3
+  buy_weight_volume: 1
+  buy_weight_breakout: 4
+  buy_weight_vwap: 2
+
+backtest:
+  point_value: 20.0
+  sl_atr_mult: 1.5
+  rr_ratio: 2.5
+  risk_pct: 0.50
+  max_bars_held: 60
+  atr_period: 14
+  use_runner: true
+  trail_atr_mult: 1.5
+  runner_max_bars: 120

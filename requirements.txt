@@ -1,0 +1,8 @@
+pandas>=2.1.0
+numpy>=1.26.0
+pandas-ta>=0.3.14b
+yfinance>=0.2.36
+pyyaml>=6.0.1
+pyarrow>=14.0.0
+flask>=3.0
+gunicorn>=21.2

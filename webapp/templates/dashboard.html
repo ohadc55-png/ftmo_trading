@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NQ Paper Trading Bot</title>
+<style>
+:root {
+    --bg: #111621; --card: #1c222d; --border: #2a3040;
+    --text: #e8eaed; --muted: #7a8599;
+    --green: #10b981; --red: #ef4444; --blue: #2463eb;
+    --cyan: #06b6d4; --orange: #f59e0b; --purple: #8b5cf6;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.4; }
+
+/* ── Header ───────────────────────────────────────────── */
+.header { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 8px; }
+.header-left { display: flex; align-items: center; gap: 12px; }
+.header-title { font-size: 16px; font-weight: 700; }
+.header-title span { color: var(--cyan); font-style: italic; }
+.tf-pills { display: flex; gap: 2px; }
+.tf-pill { padding: 3px 10px; font-size: 11px; border-radius: 4px; background: var(--bg);
+    color: var(--muted); border: 1px solid var(--border); cursor: pointer; user-select: none;
+    transition: background 0.15s, color 0.15s; }
+.tf-pill:hover { color: var(--text); border-color: var(--blue); }
+.tf-pill.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+.header-right { display: flex; align-items: center; gap: 16px; font-size: 13px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+.live-dot.on { background: var(--green); animation: pulse 2s infinite; }
+.live-dot.off { background: var(--orange); }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+.price-big { font-size: 15px; font-weight: 700; font-family: 'SF Mono', monospace;
+    color: var(--text); letter-spacing: 0.5px; }
+
+/* ── Main Layout ──────────────────────────────────────── */
+.main { display: grid; grid-template-columns: 1fr 360px; gap: 0; min-height: calc(100vh - 48px); }
+.content { padding: 16px 20px; overflow-y: auto; }
+.sidebar { border-left: 1px solid var(--border); padding: 16px; overflow-y: auto; background: var(--card); }
+
+/* ── Section Headers ──────────────────────────────────── */
+.section-title { font-size: 11px; font-weight: 600; color: var(--cyan);
+    text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; }
+
+/* ── Active Position (Sidebar) ────────────────────────── */
+.active-pos { margin-bottom: 24px; }
+.pos-empty { color: var(--muted); font-size: 14px; text-align: center; padding: 20px 0; }
+.pos-live { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.pos-live.long-border { border-left: 3px solid var(--green); }
+.pos-live.short-border { border-left: 3px solid var(--red); }
+.pos-dir-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.dir-badge { padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.dir-badge.long { background: rgba(16,185,129,0.15); color: var(--green); }
+.dir-badge.short { background: rgba(239,68,68,0.15); color: var(--red); }
+.phase-tag { font-size: 10px; color: var(--muted); background: var(--bg); border: 1px solid var(--border);
+    padding: 2px 8px; border-radius: 4px; }
+.pos-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pos-info-item .lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.pos-info-item .val { font-size: 15px; font-weight: 700; font-family: 'SF Mono', monospace; }
+.pos-info-item .val.sm { font-size: 13px; }
+
+/* SL/TP Visual Bar */
+.sl-tp-bar { margin-top: 10px; }
+.sl-tp-labels { display: flex; justify-content: space-between; font-size: 10px; margin-bottom: 4px; }
+.sl-tp-track { height: 6px; background: var(--border); border-radius: 3px; position: relative; overflow: visible; }
+.sl-tp-fill { height: 100%; border-radius: 3px; position: absolute; top: 0; }
+.sl-tp-fill.loss { background: rgba(239,68,68,0.4); left: 0; }
+.sl-tp-fill.profit { background: rgba(16,185,129,0.4); right: 0; }
+.sl-tp-marker { position: absolute; top: -3px; width: 3px; height: 12px; border-radius: 2px;
+    transform: translateX(-50%); }
+.sl-tp-marker.entry-m { background: var(--blue); }
+.sl-tp-marker.current-m { background: #fff; }
+
+/* ── Performance Cards ────────────────────────────────── */
+.perf-section { margin-bottom: 20px; }
+.perf-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.perf-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; text-align: center; }
+.perf-card .lbl { font-size: 9px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 4px; }
+.perf-card .val { font-size: 18px; font-weight: 700; font-family: 'SF Mono', monospace; }
+.perf-card .val.green { color: var(--green); }
+.perf-card .val.red { color: var(--red); }
+.perf-card .val.blue { color: var(--blue); }
+.perf-card .val.white { color: var(--text); }
+
+/* ── Budget Bar ───────────────────────────────────────── */
+.budget { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; margin-bottom: 20px; }
+.budget-header { display: flex; justify-content: space-between; font-size: 11px;
+    color: var(--muted); margin-bottom: 6px; }
+.budget-track { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+.budget-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.budget-fill.ok { background: var(--green); }
+.budget-fill.warning { background: var(--orange); }
+.budget-fill.locked { background: var(--red); }
+
+/* ── Equity Chart ─────────────────────────────────────── */
+.chart-section { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 20px; position: relative; }
+#priceCanvas, #chartCanvas { width: 100%; cursor: crosshair; }
+#chartTooltip { position: absolute; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 12px; font-size: 11px; pointer-events: none;
+    z-index: 100; display: none; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+
+/* ── Trade History ────────────────────────────────────── */
+.trades-section { margin-bottom: 20px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+thead th { padding: 8px 10px; text-align: left; font-weight: 600; color: var(--muted);
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border); background: var(--card); }
+tbody td { padding: 7px 10px; border-bottom: 1px solid rgba(42,48,64,0.5); }
+tbody tr:hover { background: rgba(36,99,235,0.05); }
+.font-mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }
+.green { color: var(--green); } .red { color: var(--red); } .blue { color: var(--blue); }
+
+/* Badges */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+.badge-buy { background: rgba(16,185,129,0.15); color: var(--green); }
+.badge-sell { background: rgba(239,68,68,0.15); color: var(--red); }
+.badge-tp { background: rgba(16,185,129,0.15); color: var(--green); }
+.badge-sl { background: rgba(239,68,68,0.15); color: var(--red); }
+.badge-timeout { background: rgba(245,158,11,0.15); color: var(--orange); }
+.badge-runner { background: rgba(6,182,212,0.15); color: var(--cyan); }
+
+/* Footer */
+.footer { padding: 12px 20px; border-top: 1px solid var(--border);
+    color: var(--muted); font-size: 10px; text-align: center; }
+
+/* ── Mobile ───────────────────────────────────────────── */
+@media (max-width: 900px) {
+    .main { grid-template-columns: 1fr; }
+    .sidebar { border-left: none; border-top: 1px solid var(--border); }
+    .perf-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 500px) {
+    .header { padding: 8px 12px; }
+    .content { padding: 12px; }
+    .sidebar { padding: 12px; }
+    .perf-card .val { font-size: 14px; }
+    .perf-card { padding: 8px; }
+    .pos-info-item .val { font-size: 13px; }
+    table { font-size: 11px; }
+    th, td { padding: 5px 6px; }
+}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<!-- ════ Header ════ -->
+<div class="header">
+    <div class="header-left">
+        <div class="header-title">NQ <span>Paper Trader</span> V3</div>
+        <div class="tf-pills" id="tfPills">
+            <div class="tf-pill active" data-tf="5" data-label="5m">5m</div>
+            <div class="tf-pill" data-tf="15" data-label="15m">15m</div>
+            <div class="tf-pill" data-tf="60" data-label="1H">1H</div>
+        </div>
+    </div>
+    <div class="header-right">
+        <span>
+            <span class="live-dot {{ 'on' if is_market_open else 'off' }}" id="liveDot"></span>
+            <span id="liveText">{{ 'Live' if is_market_open else 'Closed' }}</span>
+        </span>
+        <span style="color:var(--muted)">Session US</span>
+        <span style="color:var(--muted)">Last {{ now.strftime('%H:%M') }}</span>
+        <span class="price-big" id="headerPrice">NQ {{ '{:,.1f}'.format(current_price) if current_price else '---' }}</span>
+    </div>
+</div>
+
+<!-- ════ Main Layout ════ -->
+<div class="main">
+
+<!-- ──── Left: Content ──── -->
+<div class="content">
+
+    <!-- Price Chart -->
+    <div class="chart-section" style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div class="section-title" style="margin:0;" id="chartTitle">NQ=F Price Chart (5m)</div>
+            <div style="font-size:11px;color:var(--muted);" id="chartInfo"></div>
+        </div>
+        <canvas id="priceCanvas" height="280"></canvas>
+        <div id="priceTooltip" style="position:absolute;background:var(--bg);border:1px solid var(--border);
+            border-radius:6px;padding:8px 12px;font-size:11px;pointer-events:none;z-index:100;display:none;
+            white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.5);"></div>
+    </div>
+
+    <!-- Performance -->
+    <div class="perf-section">
+        <div class="section-title">Performance</div>
+        <div class="perf-grid">
+            <div class="perf-card">
+                <div class="lbl">Win Rate</div>
+                <div class="val {{ 'green' if stats.win_rate >= 50 else 'red' }}" id="winRate">{{ stats.win_rate }}%</div>
+            </div>
+            <div class="perf-card">
+                <div class="lbl">Profit Factor</div>
+                <div class="val {{ 'green' if stats.profit_factor >= 1.5 else ('red' if stats.profit_factor < 1 else 'white') }}" id="profitFactor">{{ '{:.2f}'.format(stats.profit_factor) }}</div>
+            </div>
+            <div class="perf-card">
+                <div class="lbl">Total P&L</div>
+                <div class="val {{ 'green' if stats.total_pnl >= 0 else 'red' }}" id="totalPnl">{{ '${:+,.0f}'.format(stats.total_pnl) }}</div>
+            </div>
+            <div class="perf-card">
+                <div class="lbl">Trades</div>
+                <div class="val blue" id="totalTrades">{{ stats.total_trades }}</div>
+            </div>
+            <div class="perf-card">
+                <div class="lbl">Expectancy</div>
+                <div class="val {{ 'green' if stats.expectancy >= 0 else 'red' }}">{{ '${:+,.0f}'.format(stats.expectancy) }}</div>
+            </div>
+            <div class="perf-card">
+                <div class="lbl">Max DD</div>
+                <div class="val red">{{ '${:,.0f}'.format(stats.max_drawdown) }}</div>
+            </div>
+            <div class="perf-card">
+                <div class="lbl">Avg P&L</div>
+                <div class="val {{ 'green' if (stats.total_pnl / stats.total_trades if stats.total_trades else 0) >= 0 else 'red' }}">
+                    {{ '${:+,.0f}'.format(stats.total_pnl / stats.total_trades if stats.total_trades else 0) }}
+                </div>
+            </div>
+            <div class="perf-card">
+                <div class="lbl">Streak</div>
+                <div class="val white">
+                    {% if stats.max_consec_wins or stats.max_consec_losses %}
+                        <span class="green">{{ stats.max_consec_wins }}W</span>/<span class="red">{{ stats.max_consec_losses }}L</span>
+                    {% else %}-{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Daily Budget -->
+    <div class="budget" id="budgetSection">
+        <div class="budget-header">
+            <span>DAILY LOSS BUDGET</span>
+            <span id="budgetText">${{ '{:,.0f}'.format(budget_remaining) }} / $750 remaining</span>
+        </div>
+        {% set budget_used_pct = ((750 - budget_remaining) / 750 * 100) | int %}
+        {% set budget_cls = 'locked' if daily_status == 'LOCKED' else ('warning' if daily_status == 'WARNING' else 'ok') %}
+        <div class="budget-track">
+            <div class="budget-fill {{ budget_cls }}" id="budgetFill" style="width:{{ budget_used_pct }}%;"></div>
+        </div>
+    </div>
+
+    <!-- Equity Curve -->
+    {% if stats.total_trades > 0 %}
+    <div class="chart-section">
+        <div class="section-title" style="margin-bottom:8px;">Equity Curve</div>
+        <canvas id="chartCanvas" height="180"></canvas>
+        <div id="chartTooltip"></div>
+    </div>
+    {% endif %}
+
+    <!-- Trade History -->
+    <div class="trades-section">
+        <div class="section-title">Trade History</div>
+        {% if stats.total_trades > 0 %}
+        <div style="overflow-x:auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th><th>Time</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>
+                    <th>Exit</th><th>Outcome</th><th>P&L</th><th>Bars</th><th>Runner</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in stats.trades | reverse %}
+                <tr>
+                    <td class="font-mono" style="color:var(--muted)">{{ t.entry_time[:10] if t.entry_time else '' }}</td>
+                    <td class="font-mono">{{ t.entry_time[11:16] if t.entry_time else '' }}</td>
+                    <td>{% if t.direction == 'buy' %}<span class="badge badge-buy">LONG</span>{% else %}<span class="badge badge-sell">SHORT</span>{% endif %}</td>
+                    <td class="font-mono">{{ '{:,.2f}'.format(t.entry_price) }}</td>
+                    <td class="font-mono red">{{ '{:,.2f}'.format(t.sl_price) }}</td>
+                    <td class="font-mono green">{{ '{:,.2f}'.format(t.tp_price) }}</td>
+                    <td class="font-mono">{{ '{:,.2f}'.format(t.exit_price) if t.exit_price else '-' }}</td>
+                    <td>
+                        {% set oc = t.outcome or '' %}
+                        {% if 'SL' in oc %}<span class="badge badge-sl">{{ oc }}</span>
+                        {% elif 'TP' in oc and ('trail' in oc or 'BE' in oc or 'timeout' in oc) %}<span class="badge badge-runner">{{ oc }}</span>
+                        {% elif 'TP' in oc %}<span class="badge badge-tp">{{ oc }}</span>
+                        {% elif 'timeout' in oc %}<span class="badge badge-timeout">{{ oc }}</span>
+                        {% else %}<span class="badge">{{ oc or '-' }}</span>{% endif %}
+                    </td>
+                    <td class="font-mono {{ 'green' if t.pnl_dollars > 0 else 'red' }}" style="font-weight:600;">
+                        {{ '${:+,.0f}'.format(t.pnl_dollars) }}
+                    </td>
+                    <td class="font-mono" style="color:var(--muted)">{{ t.bars_held }}</td>
+                    <td class="font-mono {{ 'blue' if t.runner_exit_price else '' }}" style="color:{% if t.runner_exit_price %}var(--cyan){% else %}var(--muted){% endif %}">
+                        {{ '{:,.2f}'.format(t.runner_exit_price) if t.runner_exit_price else '---' }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div style="text-align:center;color:var(--muted);padding:30px 0;font-size:14px;
+            background:var(--card);border:1px solid var(--border);border-radius:8px;">
+            No trades yet
+        </div>
+        {% endif %}
+    </div>
+
+</div><!-- /content -->
+
+<!-- ──── Right: Sidebar ──── -->
+<div class="sidebar">
+
+    <!-- Active Position -->
+    <div class="active-pos">
+        <div class="section-title">Active Position</div>
+        {% if position %}
+        <div class="pos-live {{ 'long-border' if position.direction == 'buy' else 'short-border' }}">
+            <div class="pos-dir-row">
+                <span class="dir-badge {{ 'long' if position.direction == 'buy' else 'short' }}">
+                    {{ 'LONG' if position.direction == 'buy' else 'SHORT' }}
+                </span>
+                <span class="phase-tag">{{ position.phase | upper }}</span>
+                <span style="color:var(--muted);font-size:11px;margin-left:auto;">{{ position.bars_held }} bars</span>
+            </div>
+            <div class="pos-info-grid">
+                <div class="pos-info-item">
+                    <div class="lbl">Entry</div>
+                    <div class="val font-mono">{{ '{:,.2f}'.format(position.entry_price) }}</div>
+                </div>
+                <div class="pos-info-item">
+                    <div class="lbl">Current</div>
+                    <div class="val font-mono {{ 'green' if current_price and ((position.direction == 'buy' and current_price > position.entry_price) or (position.direction == 'sell' and current_price < position.entry_price)) else 'red' }}" id="currentPrice">
+                        {{ '{:,.2f}'.format(current_price) if current_price else '---' }}
+                    </div>
+                </div>
+                <div class="pos-info-item">
+                    <div class="lbl">Unrealized</div>
+                    <div class="val {{ 'green' if unrealized and unrealized > 0 else 'red' }}" id="unrealizedPnl">
+                        {{ '${:+,.0f}'.format(unrealized) if unrealized else '$0' }}
+                    </div>
+                </div>
+                <div class="pos-info-item">
+                    <div class="lbl">Score</div>
+                    <div class="val sm blue">{{ position.score }}</div>
+                </div>
+            </div>
+
+            <!-- SL / TP visual bar -->
+            <div class="sl-tp-bar">
+                <div class="sl-tp-labels">
+                    <span class="red font-mono">SL {{ '{:,.2f}'.format(position.sl_price) }}</span>
+                    {% if position.phase == 'runner' and position.runner_sl %}
+                    <span class="font-mono" style="color:var(--orange)">Trail {{ '{:,.2f}'.format(position.runner_sl) }}</span>
+                    {% endif %}
+                    <span class="green font-mono">TP {{ '{:,.2f}'.format(position.tp_price) }}</span>
+                </div>
+                {% set sl = position.sl_price %}
+                {% set tp = position.tp_price %}
+                {% set entry = position.entry_price %}
+                {% set rng = (tp - sl) if tp > sl else (sl - tp) %}
+                {% if rng > 0 %}
+                    {% set entry_pct = ((entry - (sl if sl < tp else tp)) / rng * 100) %}
+                    {% set cur_pct = (((current_price or entry) - (sl if sl < tp else tp)) / rng * 100) if current_price else entry_pct %}
+                <div class="sl-tp-track">
+                    <div class="sl-tp-marker entry-m" style="left:{{ entry_pct | int }}%"></div>
+                    <div class="sl-tp-marker current-m" style="left:{{ cur_pct | int }}%"></div>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if position.phase == 'runner' %}
+            <div style="margin-top:10px;padding:8px;background:rgba(6,182,212,0.08);border-radius:6px;font-size:11px;">
+                <div style="color:var(--cyan);font-weight:600;margin-bottom:4px;">Runner Active</div>
+                <div style="color:var(--muted)">TP1 P&L: <span class="green">${{ '{:+,.0f}'.format(position.tp1_pnl) }}</span></div>
+                <div style="color:var(--muted)">Trail: <span style="color:var(--orange)">{{ '{:,.2f}'.format(position.runner_sl) }}</span> | Extreme: {{ '{:,.2f}'.format(position.runner_extreme) }}</div>
+                <div style="color:var(--muted)">Runner bars: {{ position.runner_bars }} / 120</div>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="pos-empty">No open position</div>
+        {% endif %}
+    </div>
+
+    <!-- Daily P&L -->
+    <div style="margin-bottom:24px;">
+        <div class="section-title">Today</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+                <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Daily P&L</div>
+                <div style="font-size:20px;font-weight:700;font-family:'SF Mono',monospace;"
+                     class="{{ 'green' if daily_pnl >= 0 else 'red' }}" id="dailyPnl">
+                    {{ '${:+,.0f}'.format(daily_pnl) }}
+                </div>
+            </div>
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+                <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Status</div>
+                <div style="font-size:20px;font-weight:700;" id="dailyStatus"
+                     class="{{ 'green' if daily_status == 'OK' else ('red' if daily_status == 'LOCKED' else 'orange') }}">
+                    {{ daily_status }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Strategy Info -->
+    <div>
+        <div class="section-title">Strategy</div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                <div><span style="color:var(--muted)">Engines</span></div>
+                <div style="color:var(--cyan)">MTF+VOL+BRK</div>
+                <div><span style="color:var(--muted)">RR Ratio</span></div>
+                <div>1:5.0</div>
+                <div><span style="color:var(--muted)">SL</span></div>
+                <div>ATR*1.5 (max 25)</div>
+                <div><span style="color:var(--muted)">Contracts</span></div>
+                <div>2 (1TP + 1R)</div>
+                <div><span style="color:var(--muted)">Smart DL</span></div>
+                <div>$750/day</div>
+                <div><span style="color:var(--muted)">Hours</span></div>
+                <div>07:00-23:00 ET</div>
+                <div><span style="color:var(--muted)">Threshold</span></div>
+                <div>5.0</div>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /sidebar -->
+
+</div><!-- /main -->
+
+<!-- Footer -->
+<div class="footer">
+    NQ Futures Paper Trading Bot v1.0 | Strategy V3 | Data: Yahoo Finance (5m, 60d) | Auto-refresh: 30s
+</div>
+
+<!-- ════ Scripts ════ -->
+<script>
+const equityData = {{ equity_data | safe }};
+const candleData = {{ candle_data | safe }};
+
+// Auto-refresh
+setInterval(async () => {
+    try {
+        const r = await fetch('/api/status');
+        const d = await r.json();
+
+        // Header price
+        const hp = document.getElementById('headerPrice');
+        if (hp && d.price) hp.textContent = 'NQ ' + d.price.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1});
+
+        // Position current price
+        const cp = document.getElementById('currentPrice');
+        if (cp && d.price) cp.textContent = d.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+        // Unrealized
+        const un = document.getElementById('unrealizedPnl');
+        if (un && d.unrealized != null) {
+            un.textContent = (d.unrealized>=0?'+':'') + '$' + Math.round(d.unrealized).toLocaleString();
+            un.className = 'val ' + (d.unrealized>=0?'green':'red');
+        }
+
+        // Performance cards
+        const tp = document.getElementById('totalPnl');
+        if (tp) { tp.textContent = (d.total_pnl>=0?'+':'') + '$' + Math.round(d.total_pnl).toLocaleString();
+            tp.className = 'val ' + (d.total_pnl>=0?'green':'red'); }
+        const wr = document.getElementById('winRate');
+        if (wr) wr.textContent = d.win_rate + '%';
+        const pf = document.getElementById('profitFactor');
+        if (pf) pf.textContent = d.profit_factor.toFixed(2);
+        const tt = document.getElementById('totalTrades');
+        if (tt) tt.textContent = d.total_trades;
+
+        // Daily
+        const dp = document.getElementById('dailyPnl');
+        if (dp) { dp.textContent = (d.daily_pnl>=0?'+':'') + '$' + Math.round(d.daily_pnl).toLocaleString();
+            dp.className = (d.daily_pnl>=0?'green':'red'); }
+
+        // Budget
+        const bt = document.getElementById('budgetText');
+        if (bt) bt.textContent = '$' + Math.round(d.budget_remaining).toLocaleString() + ' / $750 remaining';
+        const bf = document.getElementById('budgetFill');
+        if (bf) { const pct = Math.max(0,Math.min(100,((750-d.budget_remaining)/750*100)));
+            bf.style.width = pct+'%';
+            bf.className = 'budget-fill ' + (d.daily_status==='LOCKED'?'locked':(d.daily_status==='WARNING'?'warning':'ok')); }
+
+        // Live dot
+        const ld = document.getElementById('liveDot');
+        if (ld) ld.className = 'live-dot ' + (d.is_market_open?'on':'off');
+        const lt = document.getElementById('liveText');
+        if (lt) lt.textContent = d.is_market_open ? 'Live' : 'Closed';
+
+    } catch(e) { console.error('refresh error', e); }
+}, 30000);
+
+// ── Candlestick Chart ──
+let currentTF = 5;
+const tfLabels = {5: '5m', 15: '15m', 60: '1H'};
+
+function drawPriceChart() {
+    const canvas = document.getElementById('priceCanvas');
+    if (!canvas || candleData.length < 2) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr; canvas.height = 280 * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = 280;
+    const pad = {top:12, right:55, bottom:22, left:8};
+    const cw = W-pad.left-pad.right, ch = H-pad.top-pad.bottom;
+    const n = candleData.length;
+    const step = cw / n;
+    const barW = Math.max(1, Math.floor(step * 0.75));
+
+    // Find price range
+    let mn = Infinity, mx = -Infinity;
+    candleData.forEach(c => { if(c.l < mn) mn = c.l; if(c.h > mx) mx = c.h; });
+    const rng = mx - mn || 1;
+    const margin = rng * 0.05;
+    mn -= margin; mx += margin;
+    const totalRng = mx - mn;
+
+    const yp = v => pad.top + (1 - (v - mn) / totalRng) * ch;
+    const xp = i => pad.left + (i + 0.5) * step;
+
+    // Background
+    ctx.fillStyle = '#111621';
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid lines + price labels (right side)
+    const gridSteps = 5;
+    ctx.strokeStyle = '#1e2433'; ctx.lineWidth = 0.5;
+    ctx.fillStyle = '#7a8599'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+    for(let i = 0; i <= gridSteps; i++) {
+        const price = mx - (i / gridSteps) * totalRng;
+        const yy = yp(price);
+        ctx.beginPath(); ctx.moveTo(pad.left, yy); ctx.lineTo(W-pad.right, yy); ctx.stroke();
+        ctx.fillText(price.toFixed(2), W-pad.right+4, yy+3);
+    }
+
+    // Position SL/TP lines
+    {% if position %}
+    const slPrice = {{ position.sl_price }};
+    const tpPrice = {{ position.tp_price }};
+    const entryPrice = {{ position.entry_price }};
+    if(slPrice >= mn && slPrice <= mx) {
+        const sy = yp(slPrice);
+        ctx.strokeStyle = 'rgba(239,68,68,0.6)'; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pad.left,sy); ctx.lineTo(W-pad.right,sy); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ef4444'; ctx.font = '9px monospace';
+        ctx.fillText('SL '+slPrice.toFixed(2), W-pad.right+4, sy+3);
+    }
+    if(tpPrice >= mn && tpPrice <= mx) {
+        const ty = yp(tpPrice);
+        ctx.strokeStyle = 'rgba(16,185,129,0.6)'; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pad.left,ty); ctx.lineTo(W-pad.right,ty); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#10b981'; ctx.font = '9px monospace';
+        ctx.fillText('TP '+tpPrice.toFixed(2), W-pad.right+4, ty+3);
+    }
+    if(entryPrice >= mn && entryPrice <= mx) {
+        const ey = yp(entryPrice);
+        ctx.strokeStyle = 'rgba(36,99,235,0.6)'; ctx.setLineDash([2,2]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pad.left,ey); ctx.lineTo(W-pad.right,ey); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#2463eb'; ctx.font = '9px monospace';
+        ctx.fillText('E '+entryPrice.toFixed(2), W-pad.right+4, ey+3);
+    }
+    {% endif %}
+
+    // Draw candles
+    candleData.forEach((c, i) => {
+        const x = xp(i);
+        const bull = c.c >= c.o;
+        const bodyColor = bull ? '#10b981' : '#ef4444';
+        const wickColor = bull ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)';
+
+        ctx.strokeStyle = wickColor; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, yp(c.h)); ctx.lineTo(x, yp(c.l)); ctx.stroke();
+
+        const oY = yp(c.o), cY = yp(c.c);
+        const bodyH = Math.max(1, Math.abs(cY - oY));
+        ctx.fillStyle = bodyColor;
+        ctx.fillRect(x - barW/2, Math.min(oY, cY), barW, bodyH);
+    });
+
+    // Time labels (bottom)
+    ctx.fillStyle = '#7a8599'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    const labelStep = Math.max(1, Math.floor(n / 8));
+    for(let i = 0; i < n; i += labelStep) {
+        ctx.fillText(candleData[i].t, xp(i), H - 4);
+    }
+
+    // Current price label (right edge)
+    if(candleData.length > 0) {
+        const last = candleData[candleData.length-1];
+        const ly = yp(last.c);
+        const lc = last.c >= last.o ? '#10b981' : '#ef4444';
+        ctx.fillStyle = lc;
+        ctx.fillRect(W-pad.right, ly-8, pad.right, 16);
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+        ctx.fillText(last.c.toFixed(2), W-pad.right+3, ly+4);
+    }
+
+    // Chart info + title
+    const info = document.getElementById('chartInfo');
+    if(info) info.textContent = n + ' bars | ' + candleData[0].t + ' \u2014 ' + candleData[n-1].t;
+    const title = document.getElementById('chartTitle');
+    if(title) title.textContent = 'NQ=F Price Chart (' + tfLabels[currentTF] + ')';
+
+    // Tooltip
+    const tt = document.getElementById('priceTooltip');
+    canvas.onmousemove = e => {
+        const br = canvas.getBoundingClientRect();
+        const mx2 = e.clientX - br.left;
+        const idx = Math.round((mx2 - pad.left) / step - 0.5);
+        if(idx >= 0 && idx < n) {
+            const c = candleData[idx];
+            const bull = c.c >= c.o;
+            tt.style.display = 'block';
+            tt.style.left = Math.min(mx2+15, W-150) + 'px';
+            tt.style.top = '30px';
+            tt.innerHTML =
+                '<div style="color:var(--cyan);font-weight:600;margin-bottom:2px">' + c.t + '</div>' +
+                '<div>O: <span class="font-mono">' + c.o.toFixed(2) + '</span></div>' +
+                '<div>H: <span class="font-mono">' + c.h.toFixed(2) + '</span></div>' +
+                '<div>L: <span class="font-mono">' + c.l.toFixed(2) + '</span></div>' +
+                '<div>C: <span class="font-mono" style="color:'+(bull?'var(--green)':'var(--red)')+';font-weight:600">' + c.c.toFixed(2) + '</span></div>';
+        }
+    };
+    canvas.onmouseleave = () => { tt.style.display = 'none'; };
+}
+drawPriceChart();
+window.addEventListener('resize', drawPriceChart);
+
+// ── Timeframe switching ──
+document.getElementById('tfPills').addEventListener('click', async (e) => {
+    const pill = e.target.closest('.tf-pill');
+    if (!pill || pill.classList.contains('active')) return;
+    const tf = parseInt(pill.dataset.tf);
+    document.querySelectorAll('.tf-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    currentTF = tf;
+    try {
+        const r = await fetch('/api/candles?count=120&tf=' + tf);
+        const data = await r.json();
+        if(data.length > 0) { candleData.length = 0; data.forEach(c => candleData.push(c)); drawPriceChart(); }
+    } catch(e) { console.error('TF switch error', e); }
+});
+
+// Refresh candle chart every 5 minutes
+setInterval(async () => {
+    try {
+        const r = await fetch('/api/candles?count=120&tf=' + currentTF);
+        const data = await r.json();
+        if(data.length > 0) { candleData.length = 0; data.forEach(c => candleData.push(c)); drawPriceChart(); }
+    } catch(e) {}
+}, 300000);
+
+// Equity Chart
+function drawChart() {
+    const canvas = document.getElementById('chartCanvas');
+    if (!canvas || equityData.length < 2) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr; canvas.height = 180 * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = 180;
+    const pad = {top:10, right:10, bottom:20, left:55};
+    const cw = W-pad.left-pad.right, ch = H-pad.top-pad.bottom;
+    const vals = equityData.map(d=>d.equity);
+    const mn = Math.min(...vals), mx = Math.max(...vals), rng = mx-mn||1;
+    const xp = i => pad.left + (i/(equityData.length-1))*cw;
+    const yp = v => pad.top + (1-(v-mn)/rng)*ch;
+
+    // Grid
+    ctx.strokeStyle='#2a3040'; ctx.lineWidth=0.5;
+    for(let i=0;i<=4;i++){
+        const yy=pad.top+(i/4)*ch;
+        ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(W-pad.right,yy);ctx.stroke();
+        ctx.fillStyle='#7a8599';ctx.font='10px monospace';ctx.textAlign='right';
+        ctx.fillText('$'+Math.round(mx-(i/4)*rng).toLocaleString(),pad.left-5,yy+4);
+    }
+    // Baseline
+    const sy=yp(100000);
+    ctx.strokeStyle='#2a3040';ctx.setLineDash([4,4]);ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(pad.left,sy);ctx.lineTo(W-pad.right,sy);ctx.stroke();
+    ctx.setLineDash([]);
+    // Line
+    const clr = vals[vals.length-1]>=100000 ? '#10b981' : '#ef4444';
+    ctx.beginPath();ctx.strokeStyle=clr;ctx.lineWidth=2;
+    equityData.forEach((d,i)=>{const px=xp(i),py=yp(d.equity);i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);});
+    ctx.stroke();
+    // Fill
+    ctx.lineTo(xp(equityData.length-1),pad.top+ch);ctx.lineTo(xp(0),pad.top+ch);ctx.closePath();
+    const g=ctx.createLinearGradient(0,pad.top,0,pad.top+ch);
+    const c=vals[vals.length-1]>=100000?'16,185,129':'239,68,68';
+    g.addColorStop(0,'rgba('+c+',0.15)');g.addColorStop(1,'rgba('+c+',0)');
+    ctx.fillStyle=g;ctx.fill();
+    // Tooltip
+    const tt=document.getElementById('chartTooltip');
+    canvas.onmousemove=e=>{
+        const br=canvas.getBoundingClientRect(),mx2=e.clientX-br.left;
+        const idx=Math.round((mx2-pad.left)/cw*(equityData.length-1));
+        if(idx>=0&&idx<equityData.length){const d=equityData[idx];
+            tt.style.display='block';tt.style.left=(mx2+15)+'px';tt.style.top='20px';
+            tt.innerHTML='<div style="color:var(--cyan);font-weight:600">'+d.date+'</div>'+
+            '<div>Equity: $'+Math.round(d.equity).toLocaleString()+'</div>'+
+            '<div style="color:'+(d.pnl>=0?'var(--green)':'var(--red)')+'">'+(d.pnl>=0?'+':'')+
+            '$'+Math.round(d.pnl).toLocaleString()+'</div>';}
+    };
+    canvas.onmouseleave=()=>{tt.style.display='none';};
+}
+drawChart();
+window.addEventListener('resize', drawChart);
+</script>
+</body>
+</html>

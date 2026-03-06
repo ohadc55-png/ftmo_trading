@@ -1,0 +1,9 @@
+[project]
+name = "nq-ftmo-indicator"
+version = "0.1.0"
+description = "NQ Futures FTMO Challenge indicator engine"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
