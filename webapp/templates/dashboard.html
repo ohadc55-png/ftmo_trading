@@ -100,7 +100,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans
 /* ── Equity Chart ─────────────────────────────────────── */
 .chart-section { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
     padding: 16px; margin-bottom: 20px; position: relative; }
-#priceCanvas, #chartCanvas { width: 100%; cursor: crosshair; }
+#chartCanvas { width: 100%; cursor: crosshair; }
 #chartTooltip { position: absolute; background: var(--bg); border: 1px solid var(--border);
     border-radius: 6px; padding: 8px 12px; font-size: 11px; pointer-events: none;
     z-index: 100; display: none; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
@@ -147,6 +147,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 }
 </style>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 
@@ -183,10 +184,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
             <div class="section-title" style="margin:0;" id="chartTitle">NQ=F Price Chart (5m)</div>
             <div style="font-size:11px;color:var(--muted);" id="chartInfo"></div>
         </div>
-        <canvas id="priceCanvas" height="280"></canvas>
-        <div id="priceTooltip" style="position:absolute;background:var(--bg);border:1px solid var(--border);
-            border-radius:6px;padding:8px 12px;font-size:11px;pointer-events:none;z-index:100;display:none;
-            white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.5);"></div>
+        <div id="priceChart" style="height:350px;"></div>
     </div>
 
     <!-- Performance -->
@@ -495,146 +493,107 @@ setInterval(async () => {
     } catch(e) { console.error('refresh error', e); }
 }, 30000);
 
-// ── Candlestick Chart ──
+// ── Interactive Candlestick Chart (TradingView Lightweight Charts) ──
 let currentTF = 5;
 const tfLabels = {5: '5m', 15: '15m', 60: '1H'};
 
-function drawPriceChart() {
-    const canvas = document.getElementById('priceCanvas');
-    if (!canvas || candleData.length < 2) return;
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr; canvas.height = 280 * dpr;
-    ctx.scale(dpr, dpr);
-    const W = rect.width, H = 280;
-    const pad = {top:12, right:55, bottom:22, left:8};
-    const cw = W-pad.left-pad.right, ch = H-pad.top-pad.bottom;
-    const n = candleData.length;
-    const step = cw / n;
-    const barW = Math.max(1, Math.floor(step * 0.75));
-
-    // Find price range
-    let mn = Infinity, mx = -Infinity;
-    candleData.forEach(c => { if(c.l < mn) mn = c.l; if(c.h > mx) mx = c.h; });
-    const rng = mx - mn || 1;
-    const margin = rng * 0.05;
-    mn -= margin; mx += margin;
-    const totalRng = mx - mn;
-
-    const yp = v => pad.top + (1 - (v - mn) / totalRng) * ch;
-    const xp = i => pad.left + (i + 0.5) * step;
-
-    // Background
-    ctx.fillStyle = '#111621';
-    ctx.fillRect(0, 0, W, H);
-
-    // Grid lines + price labels (right side)
-    const gridSteps = 5;
-    ctx.strokeStyle = '#1e2433'; ctx.lineWidth = 0.5;
-    ctx.fillStyle = '#7a8599'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
-    for(let i = 0; i <= gridSteps; i++) {
-        const price = mx - (i / gridSteps) * totalRng;
-        const yy = yp(price);
-        ctx.beginPath(); ctx.moveTo(pad.left, yy); ctx.lineTo(W-pad.right, yy); ctx.stroke();
-        ctx.fillText(price.toFixed(2), W-pad.right+4, yy+3);
-    }
-
-    // Position SL/TP lines
-    {% if position %}
-    const slPrice = {{ position.sl_price }};
-    const tpPrice = {{ position.tp_price }};
-    const entryPrice = {{ position.entry_price }};
-    if(slPrice >= mn && slPrice <= mx) {
-        const sy = yp(slPrice);
-        ctx.strokeStyle = 'rgba(239,68,68,0.6)'; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(pad.left,sy); ctx.lineTo(W-pad.right,sy); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#ef4444'; ctx.font = '9px monospace';
-        ctx.fillText('SL '+slPrice.toFixed(2), W-pad.right+4, sy+3);
-    }
-    if(tpPrice >= mn && tpPrice <= mx) {
-        const ty = yp(tpPrice);
-        ctx.strokeStyle = 'rgba(16,185,129,0.6)'; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(pad.left,ty); ctx.lineTo(W-pad.right,ty); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#10b981'; ctx.font = '9px monospace';
-        ctx.fillText('TP '+tpPrice.toFixed(2), W-pad.right+4, ty+3);
-    }
-    if(entryPrice >= mn && entryPrice <= mx) {
-        const ey = yp(entryPrice);
-        ctx.strokeStyle = 'rgba(36,99,235,0.6)'; ctx.setLineDash([2,2]); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(pad.left,ey); ctx.lineTo(W-pad.right,ey); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#2463eb'; ctx.font = '9px monospace';
-        ctx.fillText('E '+entryPrice.toFixed(2), W-pad.right+4, ey+3);
-    }
-    {% endif %}
-
-    // Draw candles
-    candleData.forEach((c, i) => {
-        const x = xp(i);
-        const bull = c.c >= c.o;
-        const bodyColor = bull ? '#10b981' : '#ef4444';
-        const wickColor = bull ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)';
-
-        ctx.strokeStyle = wickColor; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(x, yp(c.h)); ctx.lineTo(x, yp(c.l)); ctx.stroke();
-
-        const oY = yp(c.o), cY = yp(c.c);
-        const bodyH = Math.max(1, Math.abs(cY - oY));
-        ctx.fillStyle = bodyColor;
-        ctx.fillRect(x - barW/2, Math.min(oY, cY), barW, bodyH);
-    });
-
-    // Time labels (bottom)
-    ctx.fillStyle = '#7a8599'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
-    const labelStep = Math.max(1, Math.floor(n / 8));
-    for(let i = 0; i < n; i += labelStep) {
-        ctx.fillText(candleData[i].t, xp(i), H - 4);
-    }
-
-    // Current price label (right edge)
-    if(candleData.length > 0) {
-        const last = candleData[candleData.length-1];
-        const ly = yp(last.c);
-        const lc = last.c >= last.o ? '#10b981' : '#ef4444';
-        ctx.fillStyle = lc;
-        ctx.fillRect(W-pad.right, ly-8, pad.right, 16);
-        ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
-        ctx.fillText(last.c.toFixed(2), W-pad.right+3, ly+4);
-    }
-
-    // Chart info + title
-    const info = document.getElementById('chartInfo');
-    if(info) info.textContent = n + ' bars | ' + candleData[0].t + ' \u2014 ' + candleData[n-1].t;
-    const title = document.getElementById('chartTitle');
-    if(title) title.textContent = 'NQ=F Price Chart (' + tfLabels[currentTF] + ')';
-
-    // Tooltip
-    const tt = document.getElementById('priceTooltip');
-    canvas.onmousemove = e => {
-        const br = canvas.getBoundingClientRect();
-        const mx2 = e.clientX - br.left;
-        const idx = Math.round((mx2 - pad.left) / step - 0.5);
-        if(idx >= 0 && idx < n) {
-            const c = candleData[idx];
-            const bull = c.c >= c.o;
-            tt.style.display = 'block';
-            tt.style.left = Math.min(mx2+15, W-150) + 'px';
-            tt.style.top = '30px';
-            tt.innerHTML =
-                '<div style="color:var(--cyan);font-weight:600;margin-bottom:2px">' + c.t + '</div>' +
-                '<div>O: <span class="font-mono">' + c.o.toFixed(2) + '</span></div>' +
-                '<div>H: <span class="font-mono">' + c.h.toFixed(2) + '</span></div>' +
-                '<div>L: <span class="font-mono">' + c.l.toFixed(2) + '</span></div>' +
-                '<div>C: <span class="font-mono" style="color:'+(bull?'var(--green)':'var(--red)')+';font-weight:600">' + c.c.toFixed(2) + '</span></div>';
-        }
-    };
-    canvas.onmouseleave = () => { tt.style.display = 'none'; };
+// Convert UTC epoch to local timezone for display
+const tzOffsetSec = -new Date().getTimezoneOffset() * 60;
+function toLocal(data) {
+    return data.map(c => ({
+        time: c.time + tzOffsetSec,
+        open: c.open, high: c.high, low: c.low, close: c.close,
+    }));
 }
-drawPriceChart();
-window.addEventListener('resize', drawPriceChart);
+
+const chartContainer = document.getElementById('priceChart');
+const chart = LightweightCharts.createChart(chartContainer, {
+    height: 350,
+    layout: {
+        background: { type: 'solid', color: '#111621' },
+        textColor: '#7a8599',
+        fontFamily: "'SF Mono', 'Fira Code', monospace",
+        fontSize: 10,
+    },
+    grid: {
+        vertLines: { color: '#1e2433' },
+        horzLines: { color: '#1e2433' },
+    },
+    crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: { color: 'rgba(36,99,235,0.4)', labelBackgroundColor: '#2463eb' },
+        horzLine: { color: 'rgba(36,99,235,0.4)', labelBackgroundColor: '#2463eb' },
+    },
+    rightPriceScale: { borderColor: '#2a3040' },
+    timeScale: {
+        borderColor: '#2a3040',
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 5,
+    },
+});
+
+const candleSeries = chart.addCandlestickSeries({
+    upColor: '#10b981',
+    downColor: '#ef4444',
+    borderUpColor: '#10b981',
+    borderDownColor: '#ef4444',
+    wickUpColor: 'rgba(16,185,129,0.6)',
+    wickDownColor: 'rgba(239,68,68,0.6)',
+});
+
+// Load initial data
+if (candleData.length > 0) {
+    candleSeries.setData(toLocal(candleData));
+}
+
+// Position SL/TP/Entry lines
+{% if position %}
+candleSeries.createPriceLine({
+    price: {{ position.sl_price }},
+    color: '#ef4444',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true,
+    title: 'SL',
+});
+candleSeries.createPriceLine({
+    price: {{ position.tp_price }},
+    color: '#10b981',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true,
+    title: 'TP',
+});
+candleSeries.createPriceLine({
+    price: {{ position.entry_price }},
+    color: '#2463eb',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dotted,
+    axisLabelVisible: true,
+    title: 'Entry',
+});
+{% endif %}
+
+// Chart info
+function updateChartInfo() {
+    const n = candleData.length;
+    const title = document.getElementById('chartTitle');
+    if (title) title.textContent = 'NQ=F Price Chart (' + tfLabels[currentTF] + ')';
+    const info = document.getElementById('chartInfo');
+    if (info && n > 0) {
+        const first = new Date(candleData[0].time * 1000);
+        const last = new Date(candleData[n-1].time * 1000);
+        const fmt = d => d.toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
+        info.textContent = n + ' bars | ' + fmt(first) + ' — ' + fmt(last);
+    }
+}
+updateChartInfo();
+
+// Auto-resize
+new ResizeObserver(() => {
+    chart.applyOptions({ width: chartContainer.clientWidth });
+}).observe(chartContainer);
 
 // ── Timeframe switching ──
 document.getElementById('tfPills').addEventListener('click', async (e) => {
@@ -647,7 +606,12 @@ document.getElementById('tfPills').addEventListener('click', async (e) => {
     try {
         const r = await fetch('/api/candles?count=120&tf=' + tf);
         const data = await r.json();
-        if(data.length > 0) { candleData.length = 0; data.forEach(c => candleData.push(c)); drawPriceChart(); }
+        if (data.length > 0) {
+            candleData.length = 0;
+            data.forEach(c => candleData.push(c));
+            candleSeries.setData(toLocal(candleData));
+            updateChartInfo();
+        }
     } catch(e) { console.error('TF switch error', e); }
 });
 
@@ -656,7 +620,12 @@ setInterval(async () => {
     try {
         const r = await fetch('/api/candles?count=120&tf=' + currentTF);
         const data = await r.json();
-        if(data.length > 0) { candleData.length = 0; data.forEach(c => candleData.push(c)); drawPriceChart(); }
+        if (data.length > 0) {
+            candleData.length = 0;
+            data.forEach(c => candleData.push(c));
+            candleSeries.setData(toLocal(candleData));
+            updateChartInfo();
+        }
     } catch(e) {}
 }, 300000);
 

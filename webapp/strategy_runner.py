@@ -256,12 +256,14 @@ class StrategyRunner:
         df = df.tail(count)
         candles = []
         for ts, row in df.iterrows():
+            # Send UTC epoch seconds — the browser converts to local TZ
+            epoch = int(ts.timestamp())
             candles.append({
-                "t": ts.strftime("%H:%M") if ts.date() == df.index[-1].date() else ts.strftime("%m/%d %H:%M"),
-                "o": round(float(row["open"]), 2),
-                "h": round(float(row["high"]), 2),
-                "l": round(float(row["low"]), 2),
-                "c": round(float(row["close"]), 2),
+                "time": epoch,
+                "open": round(float(row["open"]), 2),
+                "high": round(float(row["high"]), 2),
+                "low": round(float(row["low"]), 2),
+                "close": round(float(row["close"]), 2),
             })
         return candles
 

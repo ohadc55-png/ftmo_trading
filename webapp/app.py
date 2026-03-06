@@ -361,6 +361,7 @@ def trades_page():
         bot_status=bot_status,
         is_market_open=is_market_hours(),
         equity_data=json.dumps(_build_equity_data(stats.get("trades", []))),
+        candle_data=json.dumps(runner.get_recent_candles(120)),
         now=datetime.now(ET),
         show_all_trades=True,
     )
