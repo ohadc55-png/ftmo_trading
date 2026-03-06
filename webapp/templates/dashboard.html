@@ -490,6 +490,9 @@ setInterval(async () => {
         const lt = document.getElementById('liveText');
         if (lt) lt.textContent = d.is_market_open ? 'Live' : 'Closed';
 
+        // Update chart position lines dynamically
+        updatePositionLines(d.position);
+
     } catch(e) { console.error('refresh error', e); }
 }, 30000);
 
@@ -542,37 +545,72 @@ const candleSeries = chart.addCandlestickSeries({
     wickDownColor: 'rgba(239,68,68,0.6)',
 });
 
+// Markers series for trade entries
+const markerSeries = chart.addLineSeries({
+    color: 'transparent', lineWidth: 0, lastValueVisible: false, priceLineVisible: false,
+});
+
 // Load initial data
 if (candleData.length > 0) {
     candleSeries.setData(toLocal(candleData));
+    // Feed marker series same timestamps so markers can be placed
+    markerSeries.setData(toLocal(candleData).map(c => ({time: c.time, value: c.close})));
 }
 
-// Position SL/TP/Entry lines
+// ── Dynamic position lines ──
+let posLines = []; // track active price lines
+let lastPosId = null;
+
+function updatePositionLines(pos) {
+    // Remove old lines
+    posLines.forEach(line => candleSeries.removePriceLine(line));
+    posLines = [];
+
+    if (!pos) { lastPosId = null; return; }
+
+    posLines.push(candleSeries.createPriceLine({
+        price: pos.sl_price, color: '#ef4444', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true, title: 'SL',
+    }));
+    posLines.push(candleSeries.createPriceLine({
+        price: pos.tp_price, color: '#10b981', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true, title: 'TP',
+    }));
+    posLines.push(candleSeries.createPriceLine({
+        price: pos.entry_price, color: '#2463eb', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        axisLabelVisible: true, title: 'Entry',
+    }));
+
+    // Runner trailing SL
+    if (pos.phase === 'runner' && pos.runner_sl) {
+        posLines.push(candleSeries.createPriceLine({
+            price: pos.runner_sl, color: '#f59e0b', lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dashed,
+            axisLabelVisible: true, title: 'Trail',
+        }));
+    }
+
+    // Add entry marker on chart
+    if (pos.id !== lastPosId && pos.entry_time) {
+        const entryEpoch = Math.floor(new Date(pos.entry_time).getTime() / 1000) + tzOffsetSec;
+        const isLong = pos.direction === 'buy';
+        markerSeries.setMarkers([{
+            time: entryEpoch,
+            position: isLong ? 'belowBar' : 'aboveBar',
+            color: isLong ? '#10b981' : '#ef4444',
+            shape: isLong ? 'arrowUp' : 'arrowDown',
+            text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + pos.entry_price.toFixed(2),
+        }]);
+    }
+    lastPosId = pos.id;
+}
+
+// Initial position from server render
 {% if position %}
-candleSeries.createPriceLine({
-    price: {{ position.sl_price }},
-    color: '#ef4444',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    axisLabelVisible: true,
-    title: 'SL',
-});
-candleSeries.createPriceLine({
-    price: {{ position.tp_price }},
-    color: '#10b981',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    axisLabelVisible: true,
-    title: 'TP',
-});
-candleSeries.createPriceLine({
-    price: {{ position.entry_price }},
-    color: '#2463eb',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dotted,
-    axisLabelVisible: true,
-    title: 'Entry',
-});
+updatePositionLines({{ position | tojson }});
 {% endif %}
 
 // Chart info
