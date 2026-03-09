@@ -67,10 +67,17 @@ bot_status = {
 # ═══════════════════════════════════════════════════════════════════════════
 
 def is_market_hours() -> bool:
-    """Check if within trading hours: 07:00-23:00 ET, weekdays."""
+    """Check if within NQ futures trading hours (ET).
+
+    NQ futures trade Sun 18:00 - Fri 17:00 ET (with daily halt 17:00-18:00).
+    We use 07:00-23:00 for active strategy but need data flowing outside that.
+    """
     now = datetime.now(ET)
-    if now.weekday() >= 5:  # Saturday/Sunday
+    wd = now.weekday()
+    if wd == 5:  # Saturday — fully closed
         return False
+    if wd == 6:  # Sunday — futures open at 18:00 ET
+        return now.hour >= 18
     return 7 <= now.hour < 23
 
 
@@ -311,6 +318,11 @@ def dashboard():
 @app.route("/api/status")
 def api_status():
     """JSON endpoint for AJAX auto-refresh."""
+    # Refresh data if stale (>10 min)
+    if runner._last_fetch_time:
+        age = (datetime.now(ET) - runner._last_fetch_time).total_seconds()
+        if age > 600:
+            runner.fetch_and_run_pipeline()
     current_price = runner.get_current_price()
     position = pos_mgr.open_pos
     unrealized = pos_mgr.get_unrealized_pnl(current_price) if current_price and position else None
@@ -336,6 +348,14 @@ def api_status():
 @app.route("/api/candles")
 def api_candles():
     """Return recent candle data for the price chart."""
+    # Refresh data if stale (>10 min) so chart stays alive even outside strategy loop
+    if runner._last_fetch_time:
+        age = (datetime.now(ET) - runner._last_fetch_time).total_seconds()
+        if age > 600:
+            runner.fetch_and_run_pipeline()
+    elif runner._last_df is None:
+        runner.fetch_and_run_pipeline()
+
     count = request.args.get("count", 120, type=int)
     tf = request.args.get("tf", 5, type=int)
     if tf not in (5, 15, 60):
