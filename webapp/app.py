@@ -28,7 +28,7 @@ from webapp.models import (
 )
 from webapp.strategy_runner import (
     StrategyRunner, PositionManager, DailyPnLTracker,
-    POINT_VALUE, CONTRACTS, MAX_SL,
+    POINT_VALUE, TIER1_MAX_SL, TIER2_MAX_SL, SMART_DL,
 )
 from webapp.email_service import send_weekly_email, send_test_email
 
@@ -173,6 +173,7 @@ def _run_cycle():
         if position and position.get("phase") == "closed":
             # Record the trade
             pnl_tracker.record_pnl(position["total_pnl"])
+            tier = position.get("tier", 1)
             save_trade({
                 "id": position["id"],
                 "direction": position["direction"],
@@ -193,6 +194,7 @@ def _run_cycle():
                 "runner_pnl": position.get("runner_pnl"),
                 "runner_outcome": position.get("runner_outcome"),
                 "account_after": position.get("account_after"),
+                "tier": tier,
             })
             save_position(None)
             logger.info(f"Trade saved to DB: {position['outcome']} ${position['total_pnl']:+,.0f}")
@@ -207,8 +209,8 @@ def _run_cycle():
         signal = runner.check_last_bar_signal(df)
 
         if signal and signal["bar_time"] != last_bar_time:
-            # Check Smart DL
-            if not pnl_tracker.can_take_trade(signal["sl_distance"]):
+            # Check Smart DL (pass tier-specific contracts)
+            if not pnl_tracker.can_take_trade(signal["sl_distance"], signal.get("contracts", 2)):
                 logger.info(f"Signal SKIPPED: Smart DL limit (daily: ${pnl_tracker.get_today_pnl():+,.0f})")
             else:
                 # Get current account
@@ -426,9 +428,10 @@ def _build_equity_data(trades: list[dict]) -> list[dict]:
 def main():
     """Start the bot and web server."""
     logger.info("=" * 60)
-    logger.info("  NQ FUTURES PAPER TRADING BOT v1.0")
-    logger.info("  Strategy V3: BRK+MTF+VOL | RR 5.0 | 2c (1TP+1R)")
-    logger.info("  SL: ATR*1.5 (max 25) | Smart DL: $750 | Hours: 07-23 ET")
+    logger.info("  NQ FUTURES PAPER TRADING BOT v2.0")
+    logger.info("  Strategy: BRK+MTF+VOL | RR 5.0 | Tiered T1+T2")
+    logger.info("  T1: SL<=25, 2c (1TP+1R) | T2: SL<=50, 1c (no runner)")
+    logger.info("  Smart DL: $1,100 | Hours: 07-23 ET")
     logger.info("=" * 60)
 
     # Initialize database

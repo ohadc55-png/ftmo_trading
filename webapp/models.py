@@ -52,6 +52,7 @@ def init_db():
                 runner_pnl REAL,
                 runner_outcome TEXT,
                 account_after REAL,
+                tier INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
@@ -71,6 +72,12 @@ def init_db():
                 ON trades(outcome);
         """)
 
+        # Migration: add tier column to existing tables
+        try:
+            conn.execute("ALTER TABLE trades ADD COLUMN tier INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
 
 # ── Trade Operations ────────────────────────────────────────────────────
 
@@ -82,8 +89,8 @@ def save_trade(trade: dict):
             (id, direction, entry_price, exit_price, sl_price, tp_price,
              sl_distance, entry_time, exit_time, score, outcome,
              pnl_dollars, pnl_points, bars_held, contracts,
-             runner_exit_price, runner_pnl, runner_outcome, account_after)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             runner_exit_price, runner_pnl, runner_outcome, account_after, tier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade["id"], trade["direction"], trade["entry_price"],
             trade.get("exit_price"), trade["sl_price"], trade["tp_price"],
@@ -93,6 +100,7 @@ def save_trade(trade: dict):
             trade.get("bars_held", 0), trade.get("contracts", 2),
             trade.get("runner_exit_price"), trade.get("runner_pnl"),
             trade.get("runner_outcome"), trade.get("account_after"),
+            trade.get("tier", 1),
         ))
 
 

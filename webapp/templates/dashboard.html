@@ -154,7 +154,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 <!-- ════ Header ════ -->
 <div class="header">
     <div class="header-left">
-        <div class="header-title">NQ <span>Paper Trader</span> V3</div>
+        <div class="header-title">NQ <span>Paper Trader</span> V2 (Tiered)</div>
         <div class="tf-pills" id="tfPills">
             <div class="tf-pill active" data-tf="5" data-label="5m">5m</div>
             <div class="tf-pill" data-tf="15" data-label="15m">15m</div>
@@ -236,9 +236,9 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
     <div class="budget" id="budgetSection">
         <div class="budget-header">
             <span>DAILY LOSS BUDGET</span>
-            <span id="budgetText">${{ '{:,.0f}'.format(budget_remaining) }} / $750 remaining</span>
+            <span id="budgetText">${{ '{:,.0f}'.format(budget_remaining) }} / $1,100 remaining</span>
         </div>
-        {% set budget_used_pct = ((750 - budget_remaining) / 750 * 100) | int %}
+        {% set budget_used_pct = ((1100 - budget_remaining) / 1100 * 100) | int %}
         {% set budget_cls = 'locked' if daily_status == 'LOCKED' else ('warning' if daily_status == 'WARNING' else 'ok') %}
         <div class="budget-track">
             <div class="budget-fill {{ budget_cls }}" id="budgetFill" style="width:{{ budget_used_pct }}%;"></div>
@@ -411,12 +411,12 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
                 <div style="color:var(--cyan)">MTF+VOL+BRK</div>
                 <div><span style="color:var(--muted)">RR Ratio</span></div>
                 <div>1:5.0</div>
-                <div><span style="color:var(--muted)">SL</span></div>
-                <div>ATR*1.5 (max 25)</div>
-                <div><span style="color:var(--muted)">Contracts</span></div>
-                <div>2 (1TP + 1R)</div>
+                <div><span style="color:var(--muted)">T1</span></div>
+                <div>SL&le;25, 2c (1TP+1R)</div>
+                <div><span style="color:var(--muted)">T2</span></div>
+                <div>SL&le;50, 1c (no runner)</div>
                 <div><span style="color:var(--muted)">Smart DL</span></div>
-                <div>$750/day</div>
+                <div>$1,100/day</div>
                 <div><span style="color:var(--muted)">Hours</span></div>
                 <div>07:00-23:00 ET</div>
                 <div><span style="color:var(--muted)">Threshold</span></div>
@@ -431,7 +431,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 
 <!-- Footer -->
 <div class="footer">
-    NQ Futures Paper Trading Bot v1.0 | Strategy V3 | Data: Yahoo Finance (5m, 60d) | Auto-refresh: 30s
+    NQ Futures Paper Trading Bot v2.0 | Tiered T1+T2 | DL$1,100 | Data: Yahoo Finance (5m, 60d) | Auto-refresh: 30s
 </div>
 
 <!-- ════ Scripts ════ -->
@@ -478,9 +478,9 @@ setInterval(async () => {
 
         // Budget
         const bt = document.getElementById('budgetText');
-        if (bt) bt.textContent = '$' + Math.round(d.budget_remaining).toLocaleString() + ' / $750 remaining';
+        if (bt) bt.textContent = '$' + Math.round(d.budget_remaining).toLocaleString() + ' / $1,100 remaining';
         const bf = document.getElementById('budgetFill');
-        if (bf) { const pct = Math.max(0,Math.min(100,((750-d.budget_remaining)/750*100)));
+        if (bf) { const pct = Math.max(0,Math.min(100,((1100-d.budget_remaining)/1100*100)));
             bf.style.width = pct+'%';
             bf.className = 'budget-fill ' + (d.daily_status==='LOCKED'?'locked':(d.daily_status==='WARNING'?'warning':'ok')); }
 

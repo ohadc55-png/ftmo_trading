@@ -32,14 +32,15 @@ logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 
-# ── Strategy Parameters (matching V3) ────────────────────────────────────
+# ── Strategy Parameters (Tiered T1+T2) ──────────────────────────────────
 
 RR_RATIO = 5.0
-MAX_SL = 25
+TIER1_MAX_SL = 25       # Tier 1: 2 contracts (1 TP + 1 Runner)
+TIER2_MAX_SL = 50       # Tier 2: 1 contract (no runner)
+TIER2_MAX_LOSS = 1000.0 # Max potential loss per Tier 2 trade ($)
 THRESHOLD = 5.0
-SMART_DL = 750
+SMART_DL = 1100
 POINT_VALUE = 20.0
-CONTRACTS = 2  # 1 TP + 1 Runner
 EXCLUDE_HOURS = [0, 1, 2, 3, 4, 5, 6]
 SELL_WEIGHTS = np.array([3, 2, 3], dtype=float)  # MTF, VOL, BRK
 BUY_WEIGHTS = np.array([3, 1, 4], dtype=float)   # MTF, VOL, BRK
@@ -186,8 +187,19 @@ class StrategyRunner:
         entry_price = row["close"]
         sl_distance = max(atr * SL_ATR_MULT, 10.0)
 
-        if sl_distance > MAX_SL:
-            logger.info(f"  Signal skipped: SL distance {sl_distance:.1f} > {MAX_SL}")
+        # Determine tier based on SL distance
+        if sl_distance <= TIER1_MAX_SL:
+            tier = 1
+            contracts = 2  # 1 TP + 1 Runner
+        elif sl_distance <= TIER2_MAX_SL:
+            potential_loss = sl_distance * POINT_VALUE * 1  # 1 contract
+            if potential_loss > TIER2_MAX_LOSS:
+                logger.info(f"  Signal skipped: T2 potential loss ${potential_loss:.0f} > ${TIER2_MAX_LOSS:.0f}")
+                return None
+            tier = 2
+            contracts = 1  # No runner
+        else:
+            logger.info(f"  Signal skipped: SL distance {sl_distance:.1f} > {TIER2_MAX_SL}")
             return None
 
         tp_distance = sl_distance * RR_RATIO
@@ -216,6 +228,8 @@ class StrategyRunner:
             "mtf_score": round(float(mtf_s), 1),
             "vol_score": round(float(vol_s), 1),
             "brk_score": round(float(brk_s), 1),
+            "tier": tier,
+            "contracts": contracts,
         }
 
     def get_current_price(self) -> float | None:
@@ -311,6 +325,9 @@ class PositionManager:
 
     def open_position(self, signal: dict, account: float = None) -> dict:
         """Create a new virtual position from a signal."""
+        tier = signal.get("tier", 1)
+        contracts = signal.get("contracts", 2)
+
         pos = {
             "id": str(uuid.uuid4())[:8],
             "direction": signal["direction"],
@@ -321,7 +338,8 @@ class PositionManager:
             "sl_distance": signal["sl_distance"],
             "score": signal["score"],
             "atr_at_entry": signal["atr"],
-            "contracts": CONTRACTS,
+            "contracts": contracts,
+            "tier": tier,
 
             # Phase tracking
             "phase": "active",
@@ -330,7 +348,7 @@ class PositionManager:
             "tp1_exit_time": None,
             "tp1_pnl": 0.0,
 
-            # Runner tracking
+            # Runner tracking (only used for Tier 1)
             "runner_sl": None,
             "runner_extreme": None,
             "runner_trail_dist": None,
@@ -356,10 +374,11 @@ class PositionManager:
             "brk_score": signal.get("brk_score", 0),
         }
         self.open_pos = pos
+        tier_str = f"T{tier}" if tier else "T1"
         logger.info(
-            f"POSITION OPENED: {signal['direction'].upper()} @ {signal['entry_price']:.2f} "
+            f"POSITION OPENED [{tier_str}]: {signal['direction'].upper()} @ {signal['entry_price']:.2f} "
             f"| SL: {signal['sl_price']:.2f} | TP: {signal['tp_price']:.2f} "
-            f"| Score: {signal['score']}"
+            f"| {contracts}c | Score: {signal['score']}"
         )
         return pos
 
@@ -395,6 +414,8 @@ class PositionManager:
         entry = pos["entry_price"]
         sl = pos["sl_price"]
         tp = pos["tp_price"]
+        contracts = pos.get("contracts", 2)
+        tier = pos.get("tier", 1)
 
         # Check SL/TP
         if direction == "buy":
@@ -406,19 +427,25 @@ class PositionManager:
 
         # Conservative: SL wins if both hit
         if sl_hit:
-            # Both contracts stopped out
             pnl_pts = (sl - entry) if direction == "buy" else (entry - sl)
-            pnl_dollars = pnl_pts * POINT_VALUE * CONTRACTS
+            pnl_dollars = pnl_pts * POINT_VALUE * contracts
             self._close_position(pos, sl, bar_time, "SL", pnl_dollars, pnl_pts)
             return "CLOSED"
 
         if tp_hit:
-            # TP1 hit — close contract 1, start runner on contract 2
             if direction == "buy":
-                c1_pnl_pts = tp - entry
+                tp_pnl_pts = tp - entry
             else:
-                c1_pnl_pts = entry - tp
-            c1_pnl = c1_pnl_pts * POINT_VALUE * 1  # 1 contract at TP
+                tp_pnl_pts = entry - tp
+
+            if tier == 2:
+                # Tier 2: 1 contract, no runner — full close at TP
+                pnl_dollars = tp_pnl_pts * POINT_VALUE * 1
+                self._close_position(pos, tp, bar_time, "TP", pnl_dollars, tp_pnl_pts)
+                return "CLOSED"
+
+            # Tier 1: TP1 hit — close contract 1, start runner on contract 2
+            c1_pnl = tp_pnl_pts * POINT_VALUE * 1  # 1 contract at TP
 
             pos["tp1_hit"] = True
             pos["tp1_exit_price"] = tp
@@ -433,7 +460,7 @@ class PositionManager:
             pos["runner_bars"] = 0
 
             logger.info(
-                f"TP1 HIT! +{c1_pnl_pts:.2f} pts (${c1_pnl:+,.0f}) | "
+                f"TP1 HIT! +{tp_pnl_pts:.2f} pts (${c1_pnl:+,.0f}) | "
                 f"Runner active, trail dist: {pos['runner_trail_dist']:.2f}"
             )
             return "TP1_HIT"
@@ -441,7 +468,7 @@ class PositionManager:
         # Check timeout
         if pos["bars_held"] >= MAX_BARS_HELD:
             pnl_pts = (bar_close - entry) if direction == "buy" else (entry - bar_close)
-            pnl_dollars = pnl_pts * POINT_VALUE * CONTRACTS
+            pnl_dollars = pnl_pts * POINT_VALUE * contracts
             self._close_position(pos, bar_close, bar_time, "timeout", pnl_dollars, pnl_pts)
             return "CLOSED"
 
@@ -538,10 +565,11 @@ class PositionManager:
         pos = self.open_pos
         entry = pos["entry_price"]
         direction = pos["direction"]
+        contracts = pos.get("contracts", 2)
 
         if pos["phase"] == "active":
             pts = (current_price - entry) if direction == "buy" else (entry - current_price)
-            return pts * POINT_VALUE * CONTRACTS
+            return pts * POINT_VALUE * contracts
         elif pos["phase"] == "runner":
             pts = (current_price - entry) if direction == "buy" else (entry - current_price)
             return pos["tp1_pnl"] + (pts * POINT_VALUE * 1)  # TP1 realized + runner unrealized
@@ -553,7 +581,7 @@ class PositionManager:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class DailyPnLTracker:
-    """Enforces Smart Daily Loss limit ($750)."""
+    """Enforces Smart Daily Loss limit ($1,100)."""
 
     def __init__(self, daily_loss_limit: float = SMART_DL):
         self.daily_loss_limit = daily_loss_limit
@@ -566,7 +594,7 @@ class DailyPnLTracker:
         key = self.get_today_key()
         self.daily_pnl[key] = self.daily_pnl.get(key, 0) + pnl
 
-    def can_take_trade(self, sl_distance: float) -> bool:
+    def can_take_trade(self, sl_distance: float, contracts: int = 2) -> bool:
         """Check if a new trade is allowed under Smart Daily Loss."""
         key = self.get_today_key()
         current = self.daily_pnl.get(key, 0)
@@ -576,7 +604,7 @@ class DailyPnLTracker:
             return False
 
         # Check if potential loss would exceed budget
-        potential_loss = sl_distance * POINT_VALUE * CONTRACTS
+        potential_loss = sl_distance * POINT_VALUE * contracts
         remaining = self.daily_loss_limit + current
         if potential_loss > remaining:
             return False
