@@ -160,7 +160,9 @@ class StrategyRunner:
     def check_last_bar_signal(self, df: pd.DataFrame) -> dict | None:
         """Check if the most recent completed bar has a new signal.
 
-        Returns signal dict or None.
+        Returns signal dict or None.  If the signal exists but was blocked
+        by SL-cap / tier rules, a dict is still returned with an extra
+        ``blocked`` key describing the reason (so the UI can show a gray marker).
         """
         if df is None or len(df) < 2:
             return None
@@ -187,6 +189,38 @@ class StrategyRunner:
         entry_price = row["close"]
         sl_distance = max(atr * SL_ATR_MULT, 10.0)
 
+        # Common fields used by both accepted and blocked signals
+        mtf_s = row.get("mtf_score", 0)
+        vol_s = row.get("vol_score", 0)
+        brk_s = row.get("levels_score", 0)
+
+        def _make_signal(tier, contracts, blocked=None):
+            tp_distance = sl_distance * RR_RATIO
+            if direction == "buy":
+                sl_price = entry_price - sl_distance
+                tp_price = entry_price + tp_distance
+            else:
+                sl_price = entry_price + sl_distance
+                tp_price = entry_price - tp_distance
+            sig = {
+                "direction": direction,
+                "score": round(float(row.get("composite_score", 0)), 2),
+                "entry_price": round(entry_price, 2),
+                "sl_price": round(sl_price, 2),
+                "tp_price": round(tp_price, 2),
+                "sl_distance": round(sl_distance, 2),
+                "atr": round(float(atr), 2),
+                "bar_time": str(bar_time),
+                "mtf_score": round(float(mtf_s), 1),
+                "vol_score": round(float(vol_s), 1),
+                "brk_score": round(float(brk_s), 1),
+                "tier": tier,
+                "contracts": contracts,
+            }
+            if blocked:
+                sig["blocked"] = blocked
+            return sig
+
         # Determine tier based on SL distance
         if sl_distance <= TIER1_MAX_SL:
             tier = 1
@@ -194,43 +228,17 @@ class StrategyRunner:
         elif sl_distance <= TIER2_MAX_SL:
             potential_loss = sl_distance * POINT_VALUE * 1  # 1 contract
             if potential_loss > TIER2_MAX_LOSS:
-                logger.info(f"  Signal skipped: T2 potential loss ${potential_loss:.0f} > ${TIER2_MAX_LOSS:.0f}")
-                return None
+                reason = f"T2 risk ${potential_loss:.0f} > ${TIER2_MAX_LOSS:.0f}"
+                logger.info(f"  Signal BLOCKED: {reason}")
+                return _make_signal(2, 1, blocked=reason)
             tier = 2
             contracts = 1  # No runner
         else:
-            logger.info(f"  Signal skipped: SL distance {sl_distance:.1f} > {TIER2_MAX_SL}")
-            return None
+            reason = f"SL {sl_distance:.1f} > {TIER2_MAX_SL} cap"
+            logger.info(f"  Signal BLOCKED: {reason}")
+            return _make_signal(0, 0, blocked=reason)
 
-        tp_distance = sl_distance * RR_RATIO
-
-        if direction == "buy":
-            sl_price = entry_price - sl_distance
-            tp_price = entry_price + tp_distance
-        else:
-            sl_price = entry_price + sl_distance
-            tp_price = entry_price - tp_distance
-
-        # Individual engine scores for display
-        mtf_s = row.get("mtf_score", 0)
-        vol_s = row.get("vol_score", 0)
-        brk_s = row.get("levels_score", 0)
-
-        return {
-            "direction": direction,
-            "score": round(float(row.get("composite_score", 0)), 2),
-            "entry_price": round(entry_price, 2),
-            "sl_price": round(sl_price, 2),
-            "tp_price": round(tp_price, 2),
-            "sl_distance": round(sl_distance, 2),
-            "atr": round(float(atr), 2),
-            "bar_time": str(bar_time),
-            "mtf_score": round(float(mtf_s), 1),
-            "vol_score": round(float(vol_s), 1),
-            "brk_score": round(float(brk_s), 1),
-            "tier": tier,
-            "contracts": contracts,
-        }
+        return _make_signal(tier, contracts)
 
     def get_current_price(self) -> float | None:
         """Get latest price from cached data."""

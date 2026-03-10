@@ -124,6 +124,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 .badge-sl { background: rgba(239,68,68,0.15); color: var(--red); }
 .badge-timeout { background: rgba(245,158,11,0.15); color: var(--orange); }
 .badge-runner { background: rgba(6,182,212,0.15); color: var(--cyan); }
+.badge-blocked { background: rgba(107,114,128,0.2); color: #9ca3af; }
 
 /* Footer */
 .footer { padding: 12px 20px; border-top: 1px solid var(--border);
@@ -253,6 +254,32 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
         <div id="chartTooltip"></div>
     </div>
     {% endif %}
+
+    <!-- Blocked Signals Today -->
+    <div id="blockedSection" style="display:none; margin: 16px 20px 0; padding: 10px 14px; background: rgba(107,114,128,0.08); border: 1px solid rgba(107,114,128,0.2); border-radius: 8px;">
+        <div style="font-size:12px; font-weight:600; color:#9ca3af; margin-bottom:6px;">Blocked Signals Today</div>
+        <div id="blockedList"></div>
+    </div>
+    <script>
+    (function() {
+        const bs = {{ blocked_signals | safe }};
+        if (bs.length === 0) return;
+        document.getElementById('blockedSection').style.display = 'block';
+        const list = document.getElementById('blockedList');
+        bs.forEach(sig => {
+            const isLong = sig.direction === 'buy';
+            const dir = isLong ? 'LONG' : 'SHORT';
+            const time = sig.bar_time ? sig.bar_time.substring(11, 16) : '';
+            const el = document.createElement('div');
+            el.style.cssText = 'font-size:11px; color:#9ca3af; padding:2px 0; font-family:monospace;';
+            el.innerHTML = '<span class="badge badge-blocked">' + dir + '</span> ' +
+                time + ' @ ' + sig.entry_price.toLocaleString('en-US',{minimumFractionDigits:2}) +
+                ' &mdash; <span style="color:#f59e0b">' + sig.blocked + '</span>' +
+                ' (SL=' + sig.sl_distance.toFixed(1) + ' pts, Score=' + sig.score.toFixed(1) + ')';
+            list.appendChild(el);
+        });
+    })();
+    </script>
 
     <!-- Trade History -->
     <div class="trades-section">
@@ -438,6 +465,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 <script>
 const equityData = {{ equity_data | safe }};
 const candleData = {{ candle_data | safe }};
+const blockedSignals = {{ blocked_signals | safe }};
 
 // Auto-refresh
 setInterval(async () => {
@@ -489,6 +517,17 @@ setInterval(async () => {
         if (ld) ld.className = 'live-dot ' + (d.is_market_open?'on':'off');
         const lt = document.getElementById('liveText');
         if (lt) lt.textContent = d.is_market_open ? 'Live' : 'Closed';
+
+        // Update blocked signals from server
+        if (d.blocked_signals) {
+            window._blockedSignals = d.blocked_signals;
+            // If no active position, show only blocked markers
+            if (!d.position) {
+                const bm = getBlockedMarkers();
+                bm.sort((a, b) => a.time - b.time);
+                markerSeries.setMarkers(bm);
+            }
+        }
 
         // Update chart position lines dynamically
         updatePositionLines(d.position);
@@ -560,6 +599,14 @@ if (candleData.length > 0) {
     markerSeries.setData(toLocal(candleData).map(c => ({time: c.time, value: c.close})));
 }
 
+// Show blocked signal markers on initial load
+window._blockedSignals = blockedSignals;
+if (blockedSignals.length > 0) {
+    const markers = getBlockedMarkers();
+    markers.sort((a, b) => a.time - b.time);
+    markerSeries.setMarkers(markers);
+}
+
 // ── Dynamic position lines ──
 let posLines = []; // track active price lines
 let lastPosId = null;
@@ -600,16 +647,36 @@ function updatePositionLines(pos) {
     if (pos.id !== lastPosId && pos.entry_time) {
         const entryEpoch = Math.floor(new Date(pos.entry_time).getTime() / 1000) + tzOffsetSec;
         const isLong = pos.direction === 'buy';
-        markerSeries.setMarkers([{
+        const markers = [{
             time: entryEpoch,
             position: isLong ? 'belowBar' : 'aboveBar',
             color: isLong ? '#10b981' : '#ef4444',
             shape: isLong ? 'arrowUp' : 'arrowDown',
             text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + pos.entry_price.toFixed(2),
-        }]);
+        }];
+        // Merge with blocked markers
+        markers.push(...getBlockedMarkers());
+        markers.sort((a, b) => a.time - b.time);
+        markerSeries.setMarkers(markers);
     }
     lastPosId = pos.id;
 }
+
+// ── Blocked signal markers (gray) ──
+function getBlockedMarkers() {
+    return (window._blockedSignals || []).map(sig => {
+        const epoch = Math.floor(new Date(sig.bar_time).getTime() / 1000) + tzOffsetSec;
+        const isLong = sig.direction === 'buy';
+        return {
+            time: epoch,
+            position: isLong ? 'belowBar' : 'aboveBar',
+            color: '#6b7280',
+            shape: 'circle',
+            text: 'BLOCKED: ' + (sig.blocked || 'filtered'),
+        };
+    });
+}
+window._blockedSignals = blockedSignals;
 
 // Initial position from server render
 {% if position %}

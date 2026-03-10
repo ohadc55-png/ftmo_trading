@@ -53,6 +53,7 @@ app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 runner = StrategyRunner()
 pos_mgr = PositionManager()
 pnl_tracker = DailyPnLTracker()
+blocked_signals: list[dict] = []  # Signals blocked by SL cap / SmartDL (today only)
 bot_status = {
     "running": False,
     "last_cycle": None,
@@ -209,9 +210,23 @@ def _run_cycle():
         signal = runner.check_last_bar_signal(df)
 
         if signal and signal["bar_time"] != last_bar_time:
+            # Reset blocked list on new day
+            today_str = datetime.now(ET).strftime("%Y-%m-%d")
+            blocked_signals[:] = [b for b in blocked_signals if b.get("date") == today_str]
+
+            # Signal blocked by SL cap / tier rules
+            if signal.get("blocked"):
+                signal["date"] = today_str
+                blocked_signals.append(signal)
+                save_state("last_signal_bar_time", signal["bar_time"])
+                logger.info(f"Signal BLOCKED ({signal['blocked']}): {signal['direction'].upper()} @ {signal['entry_price']:.2f}")
             # Check Smart DL (pass tier-specific contracts)
-            if not pnl_tracker.can_take_trade(signal["sl_distance"], signal.get("contracts", 2)):
-                logger.info(f"Signal SKIPPED: Smart DL limit (daily: ${pnl_tracker.get_today_pnl():+,.0f})")
+            elif not pnl_tracker.can_take_trade(signal["sl_distance"], signal.get("contracts", 2)):
+                signal["blocked"] = f"SmartDL (daily ${pnl_tracker.get_today_pnl():+,.0f})"
+                signal["date"] = today_str
+                blocked_signals.append(signal)
+                save_state("last_signal_bar_time", signal["bar_time"])
+                logger.info(f"Signal BLOCKED: Smart DL limit (daily: ${pnl_tracker.get_today_pnl():+,.0f})")
             else:
                 # Get current account
                 stats = get_all_stats()
@@ -300,6 +315,10 @@ def dashboard():
     equity_data = _build_equity_data(stats.get("trades", []))
     candle_data = runner.get_recent_candles(120)
 
+    # Filter blocked signals for today only
+    today_str = datetime.now(ET).strftime("%Y-%m-%d")
+    today_blocked = [b for b in blocked_signals if b.get("date") == today_str]
+
     return render_template("dashboard.html",
         stats=stats,
         position=position,
@@ -313,6 +332,7 @@ def dashboard():
         is_market_open=is_market_hours(),
         equity_data=json.dumps(equity_data),
         candle_data=json.dumps(candle_data),
+        blocked_signals=json.dumps(today_blocked),
         now=datetime.now(ET),
     )
 
@@ -330,6 +350,9 @@ def api_status():
     unrealized = pos_mgr.get_unrealized_pnl(current_price) if current_price and position else None
     stats = get_all_stats()
 
+    today_str = datetime.now(ET).strftime("%Y-%m-%d")
+    today_blocked = [b for b in blocked_signals if b.get("date") == today_str]
+
     return jsonify({
         "price": current_price,
         "position": position,
@@ -343,6 +366,7 @@ def api_status():
         "profit_factor": stats["profit_factor"],
         "bot": bot_status,
         "is_market_open": is_market_hours(),
+        "blocked_signals": today_blocked,
         "timestamp": datetime.now(ET).isoformat(),
     })
 
