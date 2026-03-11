@@ -525,11 +525,23 @@ setInterval(async () => {
         // Update blocked signals from server
         if (d.blocked_signals) {
             window._blockedSignals = d.blocked_signals;
-            // If no active position, show only blocked markers
+            // If no active position, show blocked + last entry markers
             if (!d.position) {
-                const bm = getBlockedMarkers();
-                bm.sort((a, b) => a.time - b.time);
-                markerSeries.setMarkers(bm);
+                const allMarkers = [...getBlockedMarkers()];
+                // Keep last entry marker if we have one
+                if (_lastKnownPos && _lastKnownPos.entry_time) {
+                    const ep = Math.floor(new Date(_lastKnownPos.entry_time).getTime() / 1000) + tzOffsetSec;
+                    const isL = _lastKnownPos.direction === 'buy';
+                    allMarkers.push({
+                        time: ep,
+                        position: isL ? 'belowBar' : 'aboveBar',
+                        color: isL ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)',
+                        shape: isL ? 'arrowUp' : 'arrowDown',
+                        text: (isL ? 'LONG' : 'SHORT') + ' @ ' + _lastKnownPos.entry_price.toFixed(2),
+                    });
+                }
+                allMarkers.sort((a, b) => a.time - b.time);
+                markerSeries.setMarkers(allMarkers);
             }
         }
 
@@ -778,55 +790,71 @@ if (blockedSignals.length > 0) {
 let posLines = []; // track active price lines
 let lastPosId = null;
 
+let _lastKnownPos = null; // remember last position for faded lines after close
+
 function updatePositionLines(pos) {
     // Remove old lines
     posLines.forEach(line => candleSeries.removePriceLine(line));
     posLines = [];
 
-    if (!pos) { lastPosId = null; return; }
+    // If no position, show faded lines from last known position
+    const showPos = pos || _lastKnownPos;
+    const isClosed = !pos && _lastKnownPos;
+
+    if (!showPos) { lastPosId = null; return; }
+
+    // Remember position for after it closes
+    if (pos) _lastKnownPos = {...pos};
+
+    // Use dimmer colors for closed trades
+    const slColor = isClosed ? 'rgba(239,68,68,0.35)' : '#ef4444';
+    const tpColor = isClosed ? 'rgba(16,185,129,0.35)' : '#10b981';
+    const entryColor = isClosed ? 'rgba(36,99,235,0.35)' : '#2463eb';
 
     posLines.push(candleSeries.createPriceLine({
-        price: pos.sl_price, color: '#ef4444', lineWidth: 1,
+        price: showPos.sl_price, color: slColor, lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
         axisLabelVisible: true, title: 'SL',
     }));
     posLines.push(candleSeries.createPriceLine({
-        price: pos.tp_price, color: '#10b981', lineWidth: 1,
+        price: showPos.tp_price, color: tpColor, lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
         axisLabelVisible: true, title: 'TP',
     }));
     posLines.push(candleSeries.createPriceLine({
-        price: pos.entry_price, color: '#2463eb', lineWidth: 1,
+        price: showPos.entry_price, color: entryColor, lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dotted,
         axisLabelVisible: true, title: 'Entry',
     }));
 
     // Runner trailing SL
-    if (pos.phase === 'runner' && pos.runner_sl) {
+    if (showPos.phase === 'runner' && showPos.runner_sl) {
+        const trailColor = isClosed ? 'rgba(245,158,11,0.35)' : '#f59e0b';
         posLines.push(candleSeries.createPriceLine({
-            price: pos.runner_sl, color: '#f59e0b', lineWidth: 1,
+            price: showPos.runner_sl, color: trailColor, lineWidth: 1,
             lineStyle: LightweightCharts.LineStyle.Dashed,
             axisLabelVisible: true, title: 'Trail',
         }));
     }
 
     // Add entry marker on chart
-    if (pos.id !== lastPosId && pos.entry_time) {
-        const entryEpoch = Math.floor(new Date(pos.entry_time).getTime() / 1000) + tzOffsetSec;
-        const isLong = pos.direction === 'buy';
+    if (showPos.id !== lastPosId && showPos.entry_time) {
+        const entryEpoch = Math.floor(new Date(showPos.entry_time).getTime() / 1000) + tzOffsetSec;
+        const isLong = showPos.direction === 'buy';
+        const markerColor = isClosed ? (isLong ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)') : (isLong ? '#10b981' : '#ef4444');
         const markers = [{
             time: entryEpoch,
             position: isLong ? 'belowBar' : 'aboveBar',
-            color: isLong ? '#10b981' : '#ef4444',
+            color: markerColor,
             shape: isLong ? 'arrowUp' : 'arrowDown',
-            text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + pos.entry_price.toFixed(2),
+            text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + showPos.entry_price.toFixed(2),
         }];
         // Merge with blocked markers
         markers.push(...getBlockedMarkers());
         markers.sort((a, b) => a.time - b.time);
         markerSeries.setMarkers(markers);
     }
-    lastPosId = pos.id;
+    lastPosId = showPos.id;
 }
 
 // ── Blocked signal markers (gray) ──
