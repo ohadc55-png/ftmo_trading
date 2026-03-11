@@ -12,7 +12,7 @@ engines:
 
   volume:
     ma_period: 20
-    surge_mult: 1.5
+    surge_mult: 1.2
 
   key_levels:
     breakout_buffer_points: 5
