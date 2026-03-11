@@ -339,6 +339,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
     <!-- Active Position -->
     <div class="active-pos">
         <div class="section-title">Active Position</div>
+        <div id="positionContent">
         {% if position %}
         <div class="pos-live {{ 'long-border' if position.direction == 'buy' else 'short-border' }}">
             <div class="pos-dir-row">
@@ -406,6 +407,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
         {% else %}
         <div class="pos-empty">No open position</div>
         {% endif %}
+        </div>
     </div>
 
     <!-- Daily P&L -->
@@ -532,11 +534,83 @@ setInterval(async () => {
         // Update chart position lines dynamically
         updatePositionLines(d.position);
 
+        // Update Active Position sidebar dynamically
+        updatePositionSidebar(d.position, d.price, d.unrealized);
+
         // Refresh candle data every cycle
         await refreshCandles();
 
     } catch(e) { console.error('refresh error', e); }
 }, 30000);
+
+function updatePositionSidebar(pos, price, unrealized) {
+    const container = document.getElementById('positionContent');
+    if (!container) return;
+
+    if (!pos) {
+        container.innerHTML = '<div class="pos-empty">No open position</div>';
+        return;
+    }
+
+    const isLong = pos.direction === 'buy';
+    const dir = isLong ? 'LONG' : 'SHORT';
+    const dirCls = isLong ? 'long' : 'short';
+    const fmt = v => v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    const fmtPnl = v => (v >= 0 ? '+' : '') + '$' + Math.round(v).toLocaleString();
+
+    const priceInProfit = price && ((isLong && price > pos.entry_price) || (!isLong && price < pos.entry_price));
+    const unrCls = unrealized && unrealized > 0 ? 'green' : 'red';
+    const priceCls = priceInProfit ? 'green' : 'red';
+
+    // SL/TP bar percentages
+    const sl = pos.sl_price, tp = pos.tp_price, entry = pos.entry_price;
+    const rng = Math.abs(tp - sl);
+    const minP = Math.min(sl, tp);
+    const entryPct = rng > 0 ? Math.round((entry - minP) / rng * 100) : 50;
+    const curPct = rng > 0 && price ? Math.round(((price || entry) - minP) / rng * 100) : entryPct;
+
+    let html = '<div class="pos-live ' + dirCls + '-border">';
+    html += '<div class="pos-dir-row">';
+    html += '<span class="dir-badge ' + dirCls + '">' + dir + '</span>';
+    html += '<span class="phase-tag">' + (pos.phase || 'active').toUpperCase() + '</span>';
+    html += '<span style="color:var(--muted);font-size:11px;margin-left:auto;">' + (pos.bars_held || 0) + ' bars</span>';
+    html += '</div>';
+    html += '<div class="pos-info-grid">';
+    html += '<div class="pos-info-item"><div class="lbl">Entry</div><div class="val font-mono">' + fmt(entry) + '</div></div>';
+    html += '<div class="pos-info-item"><div class="lbl">Current</div><div class="val font-mono ' + priceCls + '" id="currentPrice">' + (price ? fmt(price) : '---') + '</div></div>';
+    html += '<div class="pos-info-item"><div class="lbl">Unrealized</div><div class="val ' + unrCls + '" id="unrealizedPnl">' + fmtPnl(unrealized || 0) + '</div></div>';
+    html += '<div class="pos-info-item"><div class="lbl">Score</div><div class="val sm blue">' + (pos.score || 0) + '</div></div>';
+    html += '</div>';
+
+    // SL/TP visual bar
+    html += '<div class="sl-tp-bar"><div class="sl-tp-labels">';
+    html += '<span class="red font-mono">SL ' + fmt(sl) + '</span>';
+    if (pos.phase === 'runner' && pos.runner_sl) {
+        html += '<span class="font-mono" style="color:var(--orange)">Trail ' + fmt(pos.runner_sl) + '</span>';
+    }
+    html += '<span class="green font-mono">TP ' + fmt(tp) + '</span>';
+    html += '</div>';
+    if (rng > 0) {
+        html += '<div class="sl-tp-track">';
+        html += '<div class="sl-tp-marker entry-m" style="left:' + entryPct + '%"></div>';
+        html += '<div class="sl-tp-marker current-m" style="left:' + curPct + '%"></div>';
+        html += '</div>';
+    }
+    html += '</div>';
+
+    // Runner info
+    if (pos.phase === 'runner') {
+        html += '<div style="margin-top:10px;padding:8px;background:rgba(6,182,212,0.08);border-radius:6px;font-size:11px;">';
+        html += '<div style="color:var(--cyan);font-weight:600;margin-bottom:4px;">Runner Active</div>';
+        html += '<div style="color:var(--muted)">TP1 P&L: <span class="green">' + fmtPnl(pos.tp1_pnl || 0) + '</span></div>';
+        html += '<div style="color:var(--muted)">Trail: <span style="color:var(--orange)">' + fmt(pos.runner_sl || 0) + '</span> | Extreme: ' + fmt(pos.runner_extreme || 0) + '</div>';
+        html += '<div style="color:var(--muted)">Runner bars: ' + (pos.runner_bars || 0) + ' / 120</div>';
+        html += '</div>';
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
 
 // ── Interactive Candlestick Chart (TradingView Lightweight Charts) ──
 let currentTF = 5;
