@@ -210,21 +210,21 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
             </div>
             <div class="perf-card">
                 <div class="lbl">Expectancy</div>
-                <div class="val {{ 'green' if stats.expectancy >= 0 else 'red' }}">{{ '${:+,.0f}'.format(stats.expectancy) }}</div>
+                <div class="val {{ 'green' if stats.expectancy >= 0 else 'red' }}" id="expectancy">{{ '${:+,.0f}'.format(stats.expectancy) }}</div>
             </div>
             <div class="perf-card">
                 <div class="lbl">Max DD</div>
-                <div class="val red">{{ '${:,.0f}'.format(stats.max_drawdown) }}</div>
+                <div class="val red" id="maxDD">{{ '${:,.0f}'.format(stats.max_drawdown) }}</div>
             </div>
             <div class="perf-card">
                 <div class="lbl">Avg P&L</div>
-                <div class="val {{ 'green' if (stats.total_pnl / stats.total_trades if stats.total_trades else 0) >= 0 else 'red' }}">
+                <div class="val {{ 'green' if (stats.total_pnl / stats.total_trades if stats.total_trades else 0) >= 0 else 'red' }}" id="avgPnl">
                     {{ '${:+,.0f}'.format(stats.total_pnl / stats.total_trades if stats.total_trades else 0) }}
                 </div>
             </div>
             <div class="perf-card">
                 <div class="lbl">Streak</div>
-                <div class="val white">
+                <div class="val white" id="streak">
                     {% if stats.max_consec_wins or stats.max_consec_losses %}
                         <span class="green">{{ stats.max_consec_wins }}W</span>/<span class="red">{{ stats.max_consec_losses }}L</span>
                     {% else %}-{% endif %}
@@ -284,6 +284,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
     <!-- Trade History -->
     <div class="trades-section">
         <div class="section-title">Trade History</div>
+        <div id="tradeHistoryContent">
         {% if stats.total_trades > 0 %}
         <div style="overflow-x:auto;">
         <table>
@@ -329,6 +330,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
             No trades yet
         </div>
         {% endif %}
+        </div>
     </div>
 
 </div><!-- /content -->
@@ -537,6 +539,12 @@ setInterval(async () => {
         // Update Active Position sidebar dynamically
         updatePositionSidebar(d.position, d.price, d.unrealized);
 
+        // Update performance stats
+        updatePerfStats(d);
+
+        // Update trade history table
+        updateTradeHistory(d.trades, d.total_trades);
+
         // Refresh candle data every cycle
         await refreshCandles();
 
@@ -609,6 +617,91 @@ function updatePositionSidebar(pos, price, unrealized) {
     }
 
     html += '</div>';
+    container.innerHTML = html;
+}
+
+let _lastTradeCount = {{ stats.total_trades }};
+
+function updatePerfStats(d) {
+    const el = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+    const cls = (id, c) => { const e = document.getElementById(id); if (e) e.className = 'val ' + c; };
+    const fmtPnl = v => (v >= 0 ? '+' : '') + '$' + Math.round(v).toLocaleString();
+
+    el('expectancy', fmtPnl(d.expectancy || 0));
+    cls('expectancy', (d.expectancy || 0) >= 0 ? 'green' : 'red');
+
+    el('maxDD', '$' + Math.round(Math.abs(d.max_drawdown || 0)).toLocaleString());
+
+    el('avgPnl', fmtPnl(d.avg_pnl || 0));
+    cls('avgPnl', (d.avg_pnl || 0) >= 0 ? 'green' : 'red');
+
+    const sk = document.getElementById('streak');
+    if (sk) {
+        if (d.max_consec_wins || d.max_consec_losses) {
+            sk.innerHTML = '<span class="green">' + (d.max_consec_wins||0) + 'W</span>/<span class="red">' + (d.max_consec_losses||0) + 'L</span>';
+        } else {
+            sk.textContent = '-';
+        }
+    }
+}
+
+function updateTradeHistory(trades, totalTrades) {
+    if (totalTrades === _lastTradeCount) return;
+    _lastTradeCount = totalTrades;
+
+    const container = document.getElementById('tradeHistoryContent');
+    if (!container) return;
+
+    if (!trades || trades.length === 0) {
+        container.innerHTML = '<div style="text-align:center;color:var(--muted);padding:30px 0;font-size:14px;background:var(--card);border:1px solid var(--border);border-radius:8px;">No trades yet</div>';
+        return;
+    }
+
+    const fmt = v => v ? v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '-';
+
+    function outcomeBadge(oc) {
+        if (!oc) return '<span class="badge">-</span>';
+        if (oc.includes('SL')) return '<span class="badge badge-sl">' + oc + '</span>';
+        if (oc.includes('TP') && (oc.includes('trail') || oc.includes('BE') || oc.includes('timeout')))
+            return '<span class="badge badge-runner">' + oc + '</span>';
+        if (oc.includes('TP')) return '<span class="badge badge-tp">' + oc + '</span>';
+        if (oc.includes('timeout')) return '<span class="badge badge-timeout">' + oc + '</span>';
+        return '<span class="badge">' + oc + '</span>';
+    }
+
+    let html = '<div style="overflow-x:auto;"><table><thead><tr>';
+    html += '<th>Date</th><th>Time</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th>';
+    html += '<th>Exit</th><th>Outcome</th><th>P&L</th><th>Bars</th><th>Runner</th>';
+    html += '</tr></thead><tbody>';
+
+    // Show newest first
+    const sorted = [...trades].reverse();
+    for (const t of sorted) {
+        const date = t.entry_time ? t.entry_time.substring(0, 10) : '';
+        const time = t.entry_time ? t.entry_time.substring(11, 16) : '';
+        const isLong = t.direction === 'buy';
+        const dirBadge = isLong ? '<span class="badge badge-buy">LONG</span>' : '<span class="badge badge-sell">SHORT</span>';
+        const pnlCls = t.pnl_dollars > 0 ? 'green' : 'red';
+        const pnlStr = (t.pnl_dollars >= 0 ? '+' : '') + '$' + Math.round(t.pnl_dollars).toLocaleString();
+        const runnerStr = t.runner_exit_price ? fmt(t.runner_exit_price) : '---';
+        const runnerStyle = t.runner_exit_price ? 'color:var(--cyan)' : 'color:var(--muted)';
+
+        html += '<tr>';
+        html += '<td class="font-mono" style="color:var(--muted)">' + date + '</td>';
+        html += '<td class="font-mono">' + time + '</td>';
+        html += '<td>' + dirBadge + '</td>';
+        html += '<td class="font-mono">' + fmt(t.entry_price) + '</td>';
+        html += '<td class="font-mono red">' + fmt(t.sl_price) + '</td>';
+        html += '<td class="font-mono green">' + fmt(t.tp_price) + '</td>';
+        html += '<td class="font-mono">' + fmt(t.exit_price) + '</td>';
+        html += '<td>' + outcomeBadge(t.outcome) + '</td>';
+        html += '<td class="font-mono ' + pnlCls + '" style="font-weight:600;">' + pnlStr + '</td>';
+        html += '<td class="font-mono" style="color:var(--muted)">' + (t.bars_held || '') + '</td>';
+        html += '<td class="font-mono" style="' + runnerStyle + '">' + runnerStr + '</td>';
+        html += '</tr>';
+    }
+
+    html += '</tbody></table></div>';
     container.innerHTML = html;
 }
 
