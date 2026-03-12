@@ -206,12 +206,20 @@ def _run_cycle():
         today_str = datetime.now(ET).strftime("%Y-%m-%d")
         blocked_signals[:] = [b for b in blocked_signals if b.get("date") == today_str]
 
-        # Signal blocked by SL cap / tier rules only (no Smart DL gate)
+        # Signal blocked by SL cap / tier rules
         if signal.get("blocked"):
             signal["date"] = today_str
             blocked_signals.append(signal)
             save_state("last_signal_bar_time", signal["bar_time"])
             logger.info(f"Signal BLOCKED ({signal['blocked']}): {signal['direction'].upper()} @ {signal['entry_price']:.2f}")
+        # Smart DL: block new trades if realized daily P&L <= -$1,100
+        # Open positions always run to completion. If P&L recovers, trading resumes.
+        elif not pnl_tracker.can_take_trade():
+            signal["blocked"] = f"SmartDL (daily realized ${pnl_tracker.get_today_pnl():+,.0f})"
+            signal["date"] = today_str
+            blocked_signals.append(signal)
+            save_state("last_signal_bar_time", signal["bar_time"])
+            logger.info(f"Signal BLOCKED: Smart DL (daily realized: ${pnl_tracker.get_today_pnl():+,.0f})")
         else:
             # Get current account
             stats = get_all_stats()
@@ -469,6 +477,22 @@ def seed_trade():
     return jsonify({"ok": True, "trade_id": trade["id"]})
 
 
+@app.route("/api/admin/delete-trade", methods=["POST"])
+def delete_trade():
+    """Delete a trade by ID (admin only)."""
+    data = request.get_json()
+    if not data or data.get("secret") != "nq_seed_2026":
+        return jsonify({"error": "unauthorized"}), 403
+    trade_id = data.get("trade_id")
+    if not trade_id:
+        return jsonify({"error": "missing trade_id"}), 400
+    from webapp.models import get_db
+    with get_db() as conn:
+        conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+    logger.info(f"Deleted trade: {trade_id}")
+    return jsonify({"ok": True})
+
+
 @app.route("/api/admin/seed-position", methods=["POST"])
 def seed_position():
     """Seed an active position into the bot (admin only)."""
@@ -497,7 +521,7 @@ def main():
     logger.info("  NQ FUTURES PAPER TRADING BOT v3.0 (Multi-Position)")
     logger.info("  Strategy: BRK+MTF+VOL | RR 5.0 | Tiered T1+T2")
     logger.info("  T1: SL<=25, 2c (1TP+1R) | T2: SL<=50, 1c (no runner)")
-    logger.info("  Smart DL: DISABLED (no limit on new positions) | Hours: 07-23 ET")
+    logger.info("  Smart DL: $1,100 (realized P&L only, recoverable) | Hours: 07-23 ET")
     logger.info("  Multi-position: ENABLED (unlimited concurrent)")
     logger.info("=" * 60)
 

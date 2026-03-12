@@ -419,7 +419,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
                 <div><span style="color:var(--muted)">T2</span></div>
                 <div>SL&le;50, 1c (no runner)</div>
                 <div><span style="color:var(--muted)">Smart DL</span></div>
-                <div style="color:var(--muted)">Disabled</div>
+                <div>$1,100 (realized)</div>
                 <div><span style="color:var(--muted)">Hours</span></div>
                 <div>07:00-23:00 ET</div>
                 <div><span style="color:var(--muted)">Threshold</span></div>
@@ -487,6 +487,9 @@ setInterval(async () => {
         if (bf) { const pct = Math.max(0,Math.min(100,((1100-d.budget_remaining)/1100*100)));
             bf.style.width = pct+'%';
             bf.className = 'budget-fill ' + (d.daily_status==='LOCKED'?'locked':(d.daily_status==='WARNING'?'warning':'ok')); }
+        const ds = document.getElementById('dailyStatus');
+        if (ds) { ds.textContent = d.daily_status;
+            ds.className = d.daily_status==='OK'?'green':(d.daily_status==='LOCKED'?'red':'orange'); }
 
         // Live dot
         const ld = document.getElementById('liveDot');

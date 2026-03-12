@@ -644,29 +644,13 @@ class DailyPnLTracker:
         key = self.get_today_key()
         self.daily_pnl[key] = self.daily_pnl.get(key, 0) + pnl
 
-    def can_take_trade(self, sl_distance: float, contracts: int = 2, open_worst_case: float = 0) -> bool:
+    def can_take_trade(self) -> bool:
         """Check if a new trade is allowed under Smart Daily Loss.
 
-        Args:
-            sl_distance: SL distance for the new trade
-            contracts: Number of contracts for the new trade
-            open_worst_case: Sum of worst-case loss from all currently open positions
+        Only checks realized daily P&L. Open positions always run to completion.
+        If realized P&L recovers above the limit, trading resumes.
         """
-        key = self.get_today_key()
-        current = self.daily_pnl.get(key, 0)
-
-        # Already at limit
-        if current <= -self.daily_loss_limit:
-            return False
-
-        # Check if potential loss + open exposure would exceed budget
-        new_trade_loss = sl_distance * POINT_VALUE * contracts
-        total_exposure = open_worst_case + new_trade_loss
-        remaining = self.daily_loss_limit + current
-        if total_exposure > remaining:
-            return False
-
-        return True
+        return self.get_today_pnl() > -self.daily_loss_limit
 
     def get_today_pnl(self) -> float:
         return self.daily_pnl.get(self.get_today_key(), 0)
