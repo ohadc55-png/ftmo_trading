@@ -525,20 +525,23 @@ setInterval(async () => {
         // Update blocked signals from server
         if (d.blocked_signals) {
             window._blockedSignals = d.blocked_signals;
-            // If no active position, show blocked + last entry markers
-            if (!d.position) {
+            // If no active positions, show blocked + last entry markers
+            const activePositions = d.positions || (d.position ? [d.position] : []);
+            if (activePositions.length === 0) {
                 const allMarkers = [...getBlockedMarkers()];
-                // Keep last entry marker if we have one
-                if (_lastKnownPos && _lastKnownPos.entry_time) {
-                    const ep = Math.floor(new Date(_lastKnownPos.entry_time).getTime() / 1000) + tzOffsetSec;
-                    const isL = _lastKnownPos.direction === 'buy';
-                    allMarkers.push({
-                        time: ep,
-                        position: isL ? 'belowBar' : 'aboveBar',
-                        color: isL ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)',
-                        shape: isL ? 'arrowUp' : 'arrowDown',
-                        text: (isL ? 'LONG' : 'SHORT') + ' @ ' + _lastKnownPos.entry_price.toFixed(2),
-                    });
+                // Keep last entry markers if we have them
+                for (const lp of _lastKnownPositions) {
+                    if (lp && lp.entry_time) {
+                        const ep = Math.floor(new Date(lp.entry_time).getTime() / 1000) + tzOffsetSec;
+                        const isL = lp.direction === 'buy';
+                        allMarkers.push({
+                            time: ep,
+                            position: isL ? 'belowBar' : 'aboveBar',
+                            color: isL ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)',
+                            shape: isL ? 'arrowUp' : 'arrowDown',
+                            text: (isL ? 'LONG' : 'SHORT') + ' @ ' + lp.entry_price.toFixed(2),
+                        });
+                    }
                 }
                 allMarkers.sort((a, b) => a.time - b.time);
                 markerSeries.setMarkers(allMarkers);
@@ -546,10 +549,10 @@ setInterval(async () => {
         }
 
         // Update chart position lines dynamically
-        updatePositionLines(d.position);
+        updatePositionLines(d.positions || (d.position ? [d.position] : []));
 
-        // Update Active Position sidebar dynamically
-        updatePositionSidebar(d.position, d.price, d.unrealized);
+        // Update Active Positions sidebar dynamically
+        updatePositionsSidebar(d.positions || (d.position ? [d.position] : []), d.price, d.unrealized);
 
         // Update performance stats
         updatePerfStats(d);
@@ -563,73 +566,88 @@ setInterval(async () => {
     } catch(e) { console.error('refresh error', e); }
 }, 30000);
 
-function updatePositionSidebar(pos, price, unrealized) {
+function updatePositionsSidebar(positions, price, totalUnrealized) {
     const container = document.getElementById('positionContent');
     if (!container) return;
 
-    if (!pos) {
-        container.innerHTML = '<div class="pos-empty">No open position</div>';
+    if (!positions || positions.length === 0) {
+        container.innerHTML = '<div class="pos-empty">No open positions</div>';
         return;
     }
 
-    const isLong = pos.direction === 'buy';
-    const dir = isLong ? 'LONG' : 'SHORT';
-    const dirCls = isLong ? 'long' : 'short';
     const fmt = v => v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
     const fmtPnl = v => (v >= 0 ? '+' : '') + '$' + Math.round(v).toLocaleString();
 
-    const priceInProfit = price && ((isLong && price > pos.entry_price) || (!isLong && price < pos.entry_price));
-    const unrCls = unrealized && unrealized > 0 ? 'green' : 'red';
-    const priceCls = priceInProfit ? 'green' : 'red';
+    let html = '';
 
-    // SL/TP bar percentages
-    const sl = pos.sl_price, tp = pos.tp_price, entry = pos.entry_price;
-    const rng = Math.abs(tp - sl);
-    const minP = Math.min(sl, tp);
-    const entryPct = rng > 0 ? Math.round((entry - minP) / rng * 100) : 50;
-    const curPct = rng > 0 && price ? Math.round(((price || entry) - minP) / rng * 100) : entryPct;
-
-    let html = '<div class="pos-live ' + dirCls + '-border">';
-    html += '<div class="pos-dir-row">';
-    html += '<span class="dir-badge ' + dirCls + '">' + dir + '</span>';
-    html += '<span class="phase-tag">' + (pos.phase || 'active').toUpperCase() + '</span>';
-    html += '<span style="color:var(--muted);font-size:11px;margin-left:auto;">' + (pos.bars_held || 0) + ' bars</span>';
-    html += '</div>';
-    html += '<div class="pos-info-grid">';
-    html += '<div class="pos-info-item"><div class="lbl">Entry</div><div class="val font-mono">' + fmt(entry) + '</div></div>';
-    html += '<div class="pos-info-item"><div class="lbl">Current</div><div class="val font-mono ' + priceCls + '" id="currentPrice">' + (price ? fmt(price) : '---') + '</div></div>';
-    html += '<div class="pos-info-item"><div class="lbl">Unrealized</div><div class="val ' + unrCls + '" id="unrealizedPnl">' + fmtPnl(unrealized || 0) + '</div></div>';
-    html += '<div class="pos-info-item"><div class="lbl">Score</div><div class="val sm blue">' + (pos.score || 0) + '</div></div>';
-    html += '</div>';
-
-    // SL/TP visual bar
-    html += '<div class="sl-tp-bar"><div class="sl-tp-labels">';
-    html += '<span class="red font-mono">SL ' + fmt(sl) + '</span>';
-    if (pos.phase === 'runner' && pos.runner_sl) {
-        html += '<span class="font-mono" style="color:var(--orange)">Trail ' + fmt(pos.runner_sl) + '</span>';
-    }
-    html += '<span class="green font-mono">TP ' + fmt(tp) + '</span>';
-    html += '</div>';
-    if (rng > 0) {
-        html += '<div class="sl-tp-track">';
-        html += '<div class="sl-tp-marker entry-m" style="left:' + entryPct + '%"></div>';
-        html += '<div class="sl-tp-marker current-m" style="left:' + curPct + '%"></div>';
-        html += '</div>';
-    }
-    html += '</div>';
-
-    // Runner info
-    if (pos.phase === 'runner') {
-        html += '<div style="margin-top:10px;padding:8px;background:rgba(6,182,212,0.08);border-radius:6px;font-size:11px;">';
-        html += '<div style="color:var(--cyan);font-weight:600;margin-bottom:4px;">Runner Active</div>';
-        html += '<div style="color:var(--muted)">TP1 P&L: <span class="green">' + fmtPnl(pos.tp1_pnl || 0) + '</span></div>';
-        html += '<div style="color:var(--muted)">Trail: <span style="color:var(--orange)">' + fmt(pos.runner_sl || 0) + '</span> | Extreme: ' + fmt(pos.runner_extreme || 0) + '</div>';
-        html += '<div style="color:var(--muted)">Runner bars: ' + (pos.runner_bars || 0) + ' / 120</div>';
+    // Summary header if multiple positions
+    if (positions.length > 1) {
+        const unrCls = totalUnrealized >= 0 ? 'green' : 'red';
+        html += '<div style="padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;font-size:12px;">';
+        html += '<span style="color:var(--muted)">' + positions.length + ' positions open</span>';
+        html += ' &nbsp;|&nbsp; <span class="' + unrCls + '">' + fmtPnl(totalUnrealized || 0) + ' total</span>';
         html += '</div>';
     }
 
-    html += '</div>';
+    for (const pos of positions) {
+        const isLong = pos.direction === 'buy';
+        const dir = isLong ? 'LONG' : 'SHORT';
+        const dirCls = isLong ? 'long' : 'short';
+        const posUnr = pos.unrealized != null ? pos.unrealized : (totalUnrealized || 0);
+        const priceInProfit = price && ((isLong && price > pos.entry_price) || (!isLong && price < pos.entry_price));
+        const unrCls = posUnr > 0 ? 'green' : 'red';
+        const priceCls = priceInProfit ? 'green' : 'red';
+
+        const sl = pos.sl_price, tp = pos.tp_price, entry = pos.entry_price;
+        const rng = Math.abs(tp - sl);
+        const minP = Math.min(sl, tp);
+        const entryPct = rng > 0 ? Math.round((entry - minP) / rng * 100) : 50;
+        const curPct = rng > 0 && price ? Math.round(((price || entry) - minP) / rng * 100) : entryPct;
+
+        html += '<div class="pos-live ' + dirCls + '-border" style="margin-bottom:8px;">';
+        html += '<div class="pos-dir-row">';
+        html += '<span class="dir-badge ' + dirCls + '">' + dir + '</span>';
+        html += '<span class="phase-tag">' + (pos.phase || 'active').toUpperCase() + '</span>';
+        html += '<span style="color:var(--blue);font-size:10px;margin-left:4px;">T' + (pos.tier || 1) + '</span>';
+        html += '<span style="color:var(--muted);font-size:11px;margin-left:auto;">' + (pos.bars_held || 0) + ' bars</span>';
+        html += '</div>';
+        html += '<div class="pos-info-grid">';
+        html += '<div class="pos-info-item"><div class="lbl">Entry</div><div class="val font-mono">' + fmt(entry) + '</div></div>';
+        html += '<div class="pos-info-item"><div class="lbl">Current</div><div class="val font-mono ' + priceCls + '">' + (price ? fmt(price) : '---') + '</div></div>';
+        html += '<div class="pos-info-item"><div class="lbl">Unrealized</div><div class="val ' + unrCls + '">' + fmtPnl(posUnr) + '</div></div>';
+        html += '<div class="pos-info-item"><div class="lbl">Score</div><div class="val sm blue">' + (pos.score || 0) + '</div></div>';
+        html += '</div>';
+
+        html += '<div class="sl-tp-bar"><div class="sl-tp-labels">';
+        html += '<span class="red font-mono">SL ' + fmt(sl) + '</span>';
+        if (pos.phase === 'runner' && pos.runner_sl) {
+            html += '<span class="font-mono" style="color:var(--orange)">Trail ' + fmt(pos.runner_sl) + '</span>';
+        }
+        html += '<span class="green font-mono">TP ' + fmt(tp) + '</span>';
+        html += '</div>';
+        if (rng > 0) {
+            html += '<div class="sl-tp-track">';
+            html += '<div class="sl-tp-marker entry-m" style="left:' + entryPct + '%"></div>';
+            html += '<div class="sl-tp-marker current-m" style="left:' + curPct + '%"></div>';
+            html += '</div>';
+        }
+        html += '</div>';
+
+        if (pos.phase === 'runner') {
+            html += '<div style="margin-top:10px;padding:8px;background:rgba(6,182,212,0.08);border-radius:6px;font-size:11px;">';
+            html += '<div style="color:var(--cyan);font-weight:600;margin-bottom:4px;">Runner Active</div>';
+            html += '<div style="color:var(--muted)">TP1 P&L: <span class="green">' + fmtPnl(pos.tp1_pnl || 0) + '</span></div>';
+            html += '<div style="color:var(--muted)">Trail: <span style="color:var(--orange)">' + fmt(pos.runner_sl || 0) + '</span> | Extreme: ' + fmt(pos.runner_extreme || 0) + '</div>';
+            html += '<div style="color:var(--muted)">Runner bars: ' + (pos.runner_bars || 0) + ' / 120</div>';
+            html += '</div>';
+        }
+        html += '</div>';
+    }
     container.innerHTML = html;
+}
+// Backward compat alias
+function updatePositionSidebar(pos, price, unrealized) {
+    updatePositionsSidebar(pos ? [pos] : [], price, unrealized);
 }
 
 let _lastTradeCount = {{ stats.total_trades }};
@@ -786,75 +804,97 @@ if (blockedSignals.length > 0) {
     markerSeries.setMarkers(markers);
 }
 
-// ── Dynamic position lines ──
+// ── Dynamic position lines (multi-position) ──
 let posLines = []; // track active price lines
-let lastPosId = null;
+let lastPosIds = new Set();
 
-let _lastKnownPos = null; // remember last position for faded lines after close
+let _lastKnownPositions = []; // remember positions for faded lines after close
 
-function updatePositionLines(pos) {
+function updatePositionLines(positions) {
+    // Accept single position for backward compat
+    if (positions && !Array.isArray(positions)) positions = [positions];
+    if (!positions) positions = [];
+
     // Remove old lines
     posLines.forEach(line => candleSeries.removePriceLine(line));
     posLines = [];
 
-    // If no position, show faded lines from last known position
-    const showPos = pos || _lastKnownPos;
-    const isClosed = !pos && _lastKnownPos;
+    // If no positions, show faded lines from last known
+    const showPositions = positions.length > 0 ? positions : _lastKnownPositions;
+    const isClosed = positions.length === 0 && _lastKnownPositions.length > 0;
 
-    if (!showPos) { lastPosId = null; return; }
+    if (showPositions.length === 0) { lastPosIds.clear(); return; }
 
-    // Remember position for after it closes
-    if (pos) _lastKnownPos = {...pos};
+    // Remember positions for after they close
+    if (positions.length > 0) _lastKnownPositions = positions.map(p => ({...p}));
 
-    // Use dimmer colors for closed trades
-    const slColor = isClosed ? 'rgba(239,68,68,0.35)' : '#ef4444';
-    const tpColor = isClosed ? 'rgba(16,185,129,0.35)' : '#10b981';
-    const entryColor = isClosed ? 'rgba(36,99,235,0.35)' : '#2463eb';
+    // Color palette for multiple positions
+    const colors = [
+        {sl: '#ef4444', tp: '#10b981', entry: '#2463eb', trail: '#f59e0b'},
+        {sl: '#f87171', tp: '#34d399', entry: '#60a5fa', trail: '#fbbf24'},
+        {sl: '#fca5a5', tp: '#6ee7b7', entry: '#93c5fd', trail: '#fcd34d'},
+    ];
 
-    posLines.push(candleSeries.createPriceLine({
-        price: showPos.sl_price, color: slColor, lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed,
-        axisLabelVisible: true, title: 'SL',
-    }));
-    posLines.push(candleSeries.createPriceLine({
-        price: showPos.tp_price, color: tpColor, lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed,
-        axisLabelVisible: true, title: 'TP',
-    }));
-    posLines.push(candleSeries.createPriceLine({
-        price: showPos.entry_price, color: entryColor, lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dotted,
-        axisLabelVisible: true, title: 'Entry',
-    }));
+    const markers = [];
+    const newIds = new Set();
 
-    // Runner trailing SL
-    if (showPos.phase === 'runner' && showPos.runner_sl) {
-        const trailColor = isClosed ? 'rgba(245,158,11,0.35)' : '#f59e0b';
+    showPositions.forEach((pos, idx) => {
+        const c = colors[Math.min(idx, colors.length - 1)];
+        const alpha = isClosed ? 0.35 : 1;
+        const applyAlpha = (hex) => isClosed ? hex.replace('#', 'rgba(') + ',0.35)' : hex;
+        // For simplicity, just dim if closed
+        const slColor = isClosed ? 'rgba(239,68,68,0.35)' : c.sl;
+        const tpColor = isClosed ? 'rgba(16,185,129,0.35)' : c.tp;
+        const entryColor = isClosed ? 'rgba(36,99,235,0.35)' : c.entry;
+        const label = showPositions.length > 1 ? ' #' + (idx + 1) : '';
+
         posLines.push(candleSeries.createPriceLine({
-            price: showPos.runner_sl, color: trailColor, lineWidth: 1,
+            price: pos.sl_price, color: slColor, lineWidth: 1,
             lineStyle: LightweightCharts.LineStyle.Dashed,
-            axisLabelVisible: true, title: 'Trail',
+            axisLabelVisible: true, title: 'SL' + label,
         }));
-    }
+        posLines.push(candleSeries.createPriceLine({
+            price: pos.tp_price, color: tpColor, lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dashed,
+            axisLabelVisible: true, title: 'TP' + label,
+        }));
+        posLines.push(candleSeries.createPriceLine({
+            price: pos.entry_price, color: entryColor, lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+            axisLabelVisible: true, title: 'Entry' + label,
+        }));
 
-    // Add entry marker on chart
-    if (showPos.id !== lastPosId && showPos.entry_time) {
-        const entryEpoch = Math.floor(new Date(showPos.entry_time).getTime() / 1000) + tzOffsetSec;
-        const isLong = showPos.direction === 'buy';
-        const markerColor = isClosed ? (isLong ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)') : (isLong ? '#10b981' : '#ef4444');
-        const markers = [{
-            time: entryEpoch,
-            position: isLong ? 'belowBar' : 'aboveBar',
-            color: markerColor,
-            shape: isLong ? 'arrowUp' : 'arrowDown',
-            text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + showPos.entry_price.toFixed(2),
-        }];
-        // Merge with blocked markers
+        if (pos.phase === 'runner' && pos.runner_sl) {
+            const trailColor = isClosed ? 'rgba(245,158,11,0.35)' : c.trail;
+            posLines.push(candleSeries.createPriceLine({
+                price: pos.runner_sl, color: trailColor, lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true, title: 'Trail' + label,
+            }));
+        }
+
+        // Entry markers
+        newIds.add(pos.id);
+        if (!lastPosIds.has(pos.id) && pos.entry_time) {
+            const entryEpoch = Math.floor(new Date(pos.entry_time).getTime() / 1000) + tzOffsetSec;
+            const isLong = pos.direction === 'buy';
+            const markerColor = isClosed ? (isLong ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)') : (isLong ? '#10b981' : '#ef4444');
+            markers.push({
+                time: entryEpoch,
+                position: isLong ? 'belowBar' : 'aboveBar',
+                color: markerColor,
+                shape: isLong ? 'arrowUp' : 'arrowDown',
+                text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + pos.entry_price.toFixed(2),
+            });
+        }
+    });
+
+    if (markers.length > 0) {
         markers.push(...getBlockedMarkers());
         markers.sort((a, b) => a.time - b.time);
         markerSeries.setMarkers(markers);
     }
-    lastPosId = showPos.id;
+    lastPosIds = newIds;
 }
 
 // ── Blocked signal markers (gray) ──
@@ -873,9 +913,11 @@ function getBlockedMarkers() {
 }
 window._blockedSignals = blockedSignals;
 
-// Initial position from server render
-{% if position %}
-updatePositionLines({{ position | tojson }});
+// Initial positions from server render
+{% if positions %}
+updatePositionLines({{ positions | tojson }});
+{% elif position %}
+updatePositionLines([{{ position | tojson }}]);
 {% endif %}
 
 // Chart info

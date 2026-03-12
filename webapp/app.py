@@ -23,7 +23,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from webapp.models import (
     init_db, save_trade, get_trades, get_today_trades,
-    save_position, get_position, save_state, get_state,
+    save_position, get_position, get_positions, delete_position,
+    save_state, get_state,
     get_all_stats,
 )
 from webapp.strategy_runner import (
@@ -159,83 +160,74 @@ def _run_cycle():
         if age > 900:
             logger.warning(f"Data stale: latest bar is {age/60:.0f} min old")
 
-    # 3. If open position, check SL/TP/runner
+    # 3. Update ALL open positions on new bar
     if pos_mgr.has_open_position() and last_bar:
-        event = pos_mgr.update_on_bar(last_bar)
-        if event == "CLOSED":
-            pos = pos_mgr.open_pos  # None now, get from last closed
-            # The position was stored in open_pos before close, get the closed data
-            # Actually, after close, open_pos is None. We need to retrieve the closed position.
-            # Let's get it from the position we had
-            pass
+        closed_positions = pos_mgr.update_all_on_bar(last_bar)
 
-        # Check if position just closed
-        position = get_position()
-        if position and position.get("phase") == "closed":
-            # Record the trade
-            pnl_tracker.record_pnl(position["total_pnl"])
-            tier = position.get("tier", 1)
+        # Process all positions that just closed
+        for closed_pos, event in closed_positions:
+            pnl_tracker.record_pnl(closed_pos["total_pnl"])
+            tier = closed_pos.get("tier", 1)
             save_trade({
-                "id": position["id"],
-                "direction": position["direction"],
-                "entry_price": position["entry_price"],
-                "exit_price": position.get("exit_price"),
-                "sl_price": position["sl_price"],
-                "tp_price": position["tp_price"],
-                "sl_distance": position["sl_distance"],
-                "entry_time": position["entry_time"],
-                "exit_time": position.get("exit_time"),
-                "score": position["score"],
-                "outcome": position.get("outcome", ""),
-                "pnl_dollars": position["total_pnl"],
-                "pnl_points": position.get("pnl_points", 0),
-                "bars_held": position.get("bars_held", 0),
-                "contracts": position.get("contracts", 2),
-                "runner_exit_price": position.get("runner_exit_price"),
-                "runner_pnl": position.get("runner_pnl"),
-                "runner_outcome": position.get("runner_outcome"),
-                "account_after": position.get("account_after"),
+                "id": closed_pos["id"],
+                "direction": closed_pos["direction"],
+                "entry_price": closed_pos["entry_price"],
+                "exit_price": closed_pos.get("exit_price"),
+                "sl_price": closed_pos["sl_price"],
+                "tp_price": closed_pos["tp_price"],
+                "sl_distance": closed_pos["sl_distance"],
+                "entry_time": closed_pos["entry_time"],
+                "exit_time": closed_pos.get("exit_time"),
+                "score": closed_pos["score"],
+                "outcome": closed_pos.get("outcome", ""),
+                "pnl_dollars": closed_pos["total_pnl"],
+                "pnl_points": closed_pos.get("pnl_points", 0),
+                "bars_held": closed_pos.get("bars_held", 0),
+                "contracts": closed_pos.get("contracts", 2),
+                "runner_exit_price": closed_pos.get("runner_exit_price"),
+                "runner_pnl": closed_pos.get("runner_pnl"),
+                "runner_outcome": closed_pos.get("runner_outcome"),
+                "account_after": closed_pos.get("account_after"),
                 "tier": tier,
             })
-            save_position(None)
-            logger.info(f"Trade saved to DB: {position['outcome']} ${position['total_pnl']:+,.0f}")
+            delete_position(closed_pos["id"])
+            logger.info(f"Trade saved to DB: {closed_pos['outcome']} ${closed_pos['total_pnl']:+,.0f}")
 
-    # 4. Save current position state
-    if pos_mgr.has_open_position():
-        save_position(pos_mgr.open_pos)
+    # 4. Save all open position states
+    for pos in pos_mgr.get_open_positions():
+        save_position(pos)
 
-    # 5. If flat, check for new signal
-    if not pos_mgr.has_open_position():
-        last_bar_time = get_state("last_signal_bar_time")
-        signal = runner.check_last_bar_signal(df)
+    # 5. Check for new signal (always, regardless of open positions)
+    last_bar_time = get_state("last_signal_bar_time")
+    signal = runner.check_last_bar_signal(df)
 
-        if signal and signal["bar_time"] != last_bar_time:
-            # Reset blocked list on new day
-            today_str = datetime.now(ET).strftime("%Y-%m-%d")
-            blocked_signals[:] = [b for b in blocked_signals if b.get("date") == today_str]
+    if signal and signal["bar_time"] != last_bar_time:
+        # Reset blocked list on new day
+        today_str = datetime.now(ET).strftime("%Y-%m-%d")
+        blocked_signals[:] = [b for b in blocked_signals if b.get("date") == today_str]
 
-            # Signal blocked by SL cap / tier rules
-            if signal.get("blocked"):
-                signal["date"] = today_str
-                blocked_signals.append(signal)
-                save_state("last_signal_bar_time", signal["bar_time"])
-                logger.info(f"Signal BLOCKED ({signal['blocked']}): {signal['direction'].upper()} @ {signal['entry_price']:.2f}")
-            # Check Smart DL (pass tier-specific contracts)
-            elif not pnl_tracker.can_take_trade(signal["sl_distance"], signal.get("contracts", 2)):
-                signal["blocked"] = f"SmartDL (daily ${pnl_tracker.get_today_pnl():+,.0f})"
-                signal["date"] = today_str
-                blocked_signals.append(signal)
-                save_state("last_signal_bar_time", signal["bar_time"])
-                logger.info(f"Signal BLOCKED: Smart DL limit (daily: ${pnl_tracker.get_today_pnl():+,.0f})")
-            else:
-                # Get current account
-                stats = get_all_stats()
-                account = 100_000 + stats["total_pnl"]
+        # Signal blocked by SL cap / tier rules
+        if signal.get("blocked"):
+            signal["date"] = today_str
+            blocked_signals.append(signal)
+            save_state("last_signal_bar_time", signal["bar_time"])
+            logger.info(f"Signal BLOCKED ({signal['blocked']}): {signal['direction'].upper()} @ {signal['entry_price']:.2f}")
+        # Check Smart DL (include worst-case of open positions)
+        elif not pnl_tracker.can_take_trade(signal["sl_distance"], signal.get("contracts", 2), pos_mgr.get_worst_case_loss()):
+            signal["blocked"] = f"SmartDL (daily ${pnl_tracker.get_today_pnl():+,.0f}, open exposure: ${pos_mgr.get_worst_case_loss():,.0f})"
+            signal["date"] = today_str
+            blocked_signals.append(signal)
+            save_state("last_signal_bar_time", signal["bar_time"])
+            logger.info(f"Signal BLOCKED: Smart DL limit (daily: ${pnl_tracker.get_today_pnl():+,.0f}, exposure: ${pos_mgr.get_worst_case_loss():,.0f})")
+        else:
+            # Get current account
+            stats = get_all_stats()
+            account = 100_000 + stats["total_pnl"]
 
-                pos = pos_mgr.open_position(signal, account=account)
-                save_position(pos)
-                save_state("last_signal_bar_time", signal["bar_time"])
-                logger.info(f"Signal TAKEN: {signal['direction'].upper()} @ {signal['entry_price']:.2f}")
+            pos = pos_mgr.open_position(signal, account=account)
+            save_position(pos)
+            save_state("last_signal_bar_time", signal["bar_time"])
+            logger.info(f"Signal TAKEN: {signal['direction'].upper()} @ {signal['entry_price']:.2f} | Open positions: {len(pos_mgr.open_positions)}")
 
     # 6. Update bot status
     bot_status["last_cycle"] = datetime.now(ET).isoformat()
@@ -248,9 +240,9 @@ def _run_cycle():
     price_str = f"{current_price:,.2f}" if current_price else "N/A"
     pos_str = "FLAT"
     if pos_mgr.has_open_position():
-        p = pos_mgr.open_pos
-        unr = pos_mgr.get_unrealized_pnl(current_price) if current_price else 0
-        pos_str = f"{p['direction'].upper()} @ {p['entry_price']:,.2f} ({p['phase']}) unrealized: ${unr:+,.0f}"
+        n_pos = len(pos_mgr.open_positions)
+        unr = pos_mgr.get_total_unrealized_pnl(current_price) if current_price else 0
+        pos_str = f"{n_pos} positions open, unrealized: ${unr:+,.0f}, exposure: ${pos_mgr.get_worst_case_loss():,.0f}"
 
     logger.info(
         f"Cycle #{bot_status['cycles_count']} | NQ {price_str} | {pos_str} | "
@@ -261,11 +253,14 @@ def _run_cycle():
 
 def _restore_state():
     """Restore bot state from DB on startup."""
-    # Restore position
-    pos_data = get_position()
-    if pos_data and pos_data.get("phase") != "closed":
-        pos_mgr.open_pos = pos_data
-        logger.info(f"Restored open position: {pos_data['direction']} @ {pos_data['entry_price']}")
+    # Restore all open positions
+    all_positions = get_positions()
+    for pos_data in all_positions:
+        if pos_data.get("phase") != "closed":
+            pos_mgr.open_positions[pos_data["id"]] = pos_data
+            logger.info(f"Restored open position: {pos_data['direction']} @ {pos_data['entry_price']}")
+    if all_positions:
+        logger.info(f"Restored {len(pos_mgr.open_positions)} open position(s)")
 
     # Restore daily P&L tracker
     pnl_data = get_state("pnl_tracker")
@@ -307,9 +302,10 @@ def dashboard():
     stats = get_all_stats()
     today = datetime.now(ET).strftime("%Y-%m-%d")
     today_trades = get_today_trades(today)
-    position = pos_mgr.open_pos
+    positions = pos_mgr.get_open_positions()
+    position = positions[0] if positions else None  # backward compat for template
     current_price = runner.get_current_price()
-    unrealized = pos_mgr.get_unrealized_pnl(current_price) if current_price and position else None
+    unrealized = pos_mgr.get_unrealized_pnl(current_price) if current_price and positions else None
 
     # Equity curve data
     equity_data = _build_equity_data(stats.get("trades", []))
@@ -322,6 +318,7 @@ def dashboard():
     return render_template("dashboard.html",
         stats=stats,
         position=position,
+        positions=positions,
         current_price=current_price,
         unrealized=unrealized,
         today_trades=today_trades,
@@ -346,8 +343,17 @@ def api_status():
         if age > 600:
             runner.fetch_and_run_pipeline()
     current_price = runner.get_current_price()
-    position = pos_mgr.open_pos
-    unrealized = pos_mgr.get_unrealized_pnl(current_price) if current_price and position else None
+    positions = pos_mgr.get_open_positions()
+    unrealized = pos_mgr.get_total_unrealized_pnl(current_price) if current_price and positions else None
+
+    # Per-position unrealized
+    positions_with_pnl = []
+    for pos in positions:
+        pos_copy = dict(pos)
+        if current_price:
+            pos_copy["unrealized"] = pos_mgr.get_position_unrealized_pnl(pos, current_price)
+        positions_with_pnl.append(pos_copy)
+
     stats = get_all_stats()
 
     today_str = datetime.now(ET).strftime("%Y-%m-%d")
@@ -355,8 +361,11 @@ def api_status():
 
     return jsonify({
         "price": current_price,
-        "position": position,
+        "position": positions_with_pnl[0] if positions_with_pnl else None,  # backward compat
+        "positions": positions_with_pnl,
+        "positions_count": len(positions),
         "unrealized": unrealized,
+        "worst_case_exposure": pos_mgr.get_worst_case_loss(),
         "daily_pnl": pnl_tracker.get_today_pnl(),
         "daily_status": pnl_tracker.get_today_status(),
         "budget_remaining": pnl_tracker.get_budget_remaining(),
@@ -474,10 +483,11 @@ def seed_trade():
 def main():
     """Start the bot and web server."""
     logger.info("=" * 60)
-    logger.info("  NQ FUTURES PAPER TRADING BOT v2.0")
+    logger.info("  NQ FUTURES PAPER TRADING BOT v3.0 (Multi-Position)")
     logger.info("  Strategy: BRK+MTF+VOL | RR 5.0 | Tiered T1+T2")
     logger.info("  T1: SL<=25, 2c (1TP+1R) | T2: SL<=50, 1c (no runner)")
-    logger.info("  Smart DL: $1,100 | Hours: 07-23 ET")
+    logger.info("  Smart DL: $1,100 (worst-case aware) | Hours: 07-23 ET")
+    logger.info("  Multi-position: ENABLED (unlimited concurrent)")
     logger.info("=" * 60)
 
     # Initialize database

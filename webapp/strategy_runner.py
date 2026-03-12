@@ -316,7 +316,7 @@ def _apply_cooldown(eligible, scores, threshold):
 # ═══════════════════════════════════════════════════════════════════════════
 
 class PositionManager:
-    """Manages virtual positions with runner mode.
+    """Manages multiple virtual positions with runner mode.
 
     Mirrors simulator.py logic exactly:
     - Phase 1 (active): Check SL/TP each bar, timeout at max_bars_held
@@ -325,11 +325,21 @@ class PositionManager:
     """
 
     def __init__(self):
-        self.open_pos: dict | None = None
+        self.open_positions: dict[str, dict] = {}  # keyed by position ID
         self.starting_capital = 100_000.0
 
+    # Backward compat property
+    @property
+    def open_pos(self):
+        if not self.open_positions:
+            return None
+        return next(iter(self.open_positions.values()))
+
     def has_open_position(self) -> bool:
-        return self.open_pos is not None
+        return len(self.open_positions) > 0
+
+    def get_open_positions(self) -> list[dict]:
+        return list(self.open_positions.values())
 
     def open_position(self, signal: dict, account: float = None) -> dict:
         """Create a new virtual position from a signal."""
@@ -381,29 +391,33 @@ class PositionManager:
             "vol_score": signal.get("vol_score", 0),
             "brk_score": signal.get("brk_score", 0),
         }
-        self.open_pos = pos
+        self.open_positions[pos["id"]] = pos
         tier_str = f"T{tier}" if tier else "T1"
         logger.info(
             f"POSITION OPENED [{tier_str}]: {signal['direction'].upper()} @ {signal['entry_price']:.2f} "
             f"| SL: {signal['sl_price']:.2f} | TP: {signal['tp_price']:.2f} "
-            f"| {contracts}c | Score: {signal['score']}"
+            f"| {contracts}c | Score: {signal['score']} "
+            f"| Open positions: {len(self.open_positions)}"
         )
         return pos
 
-    def update_on_bar(self, bar: dict) -> str | None:
-        """Update position with new bar data.
+    def update_all_on_bar(self, bar: dict) -> list[tuple[dict, str]]:
+        """Update ALL open positions with new bar data.
 
-        Args:
-            bar: dict with keys: high, low, close
-
-        Returns:
-            Event string ('SL', 'TP1_HIT', 'RUNNER_TRAIL', 'RUNNER_BE',
-            'RUNNER_TIMEOUT', 'TIMEOUT', 'CLOSED') or None
+        Returns list of (closed_position_data, event) tuples for positions that closed.
         """
-        pos = self.open_pos
-        if pos is None:
-            return None
+        closed = []
+        # Iterate a copy since we may remove during iteration
+        for pos_id in list(self.open_positions.keys()):
+            pos = self.open_positions[pos_id]
+            event = self._update_single_position(pos, bar)
+            if event == "CLOSED":
+                closed.append((dict(pos), event))  # copy before removing
+                del self.open_positions[pos_id]
+        return closed
 
+    def _update_single_position(self, pos: dict, bar: dict) -> str | None:
+        """Update a single position with new bar data."""
         bar_high = bar["high"]
         bar_low = bar["low"]
         bar_close = bar["close"]
@@ -413,6 +427,13 @@ class PositionManager:
             return self._update_active_phase(pos, bar_high, bar_low, bar_close, bar_time)
         elif pos["phase"] == "runner":
             return self._update_runner_phase(pos, bar_high, bar_low, bar_close, bar_time)
+        return None
+
+    # Keep old method for backward compat but it now calls update_all_on_bar
+    def update_on_bar(self, bar: dict) -> str | None:
+        closed = self.update_all_on_bar(bar)
+        if closed:
+            return "CLOSED"
         return None
 
     def _update_active_phase(self, pos, bar_high, bar_low, bar_close, bar_time) -> str | None:
@@ -549,7 +570,7 @@ class PositionManager:
         return "CLOSED"
 
     def _close_position(self, pos, exit_price, exit_time, outcome, total_pnl, pnl_pts=None):
-        """Finalize and close the position."""
+        """Finalize and close the position. Removal from dict happens in update_all_on_bar."""
         pos["exit_price"] = exit_price
         pos["exit_time"] = exit_time
         pos["outcome"] = outcome
@@ -558,19 +579,22 @@ class PositionManager:
             pos["pnl_points"] = pnl_pts
         pos["account_after"] = pos["account_before"] + total_pnl
         pos["phase"] = "closed"
-        self.open_pos = None
 
         logger.info(
             f"TRADE CLOSED: {outcome} | {pos['direction'].upper()} "
             f"@ {pos['entry_price']:.2f} → {exit_price:.2f} | "
-            f"P&L: ${total_pnl:+,.0f} | Bars: {pos['bars_held']}"
+            f"P&L: ${total_pnl:+,.0f} | Bars: {pos['bars_held']} "
+            f"| Remaining open: {len(self.open_positions) - 1}"
         )
 
     def get_unrealized_pnl(self, current_price: float) -> float | None:
-        """Calculate unrealized P&L for the open position."""
-        if self.open_pos is None:
+        """Calculate total unrealized P&L across all open positions."""
+        if not self.open_positions:
             return None
-        pos = self.open_pos
+        return self.get_total_unrealized_pnl(current_price)
+
+    def get_position_unrealized_pnl(self, pos: dict, current_price: float) -> float:
+        """Calculate unrealized P&L for a single position."""
         entry = pos["entry_price"]
         direction = pos["direction"]
         contracts = pos.get("contracts", 2)
@@ -580,8 +604,26 @@ class PositionManager:
             return pts * POINT_VALUE * contracts
         elif pos["phase"] == "runner":
             pts = (current_price - entry) if direction == "buy" else (entry - current_price)
-            return pos["tp1_pnl"] + (pts * POINT_VALUE * 1)  # TP1 realized + runner unrealized
-        return None
+            return pos["tp1_pnl"] + (pts * POINT_VALUE * 1)
+        return 0.0
+
+    def get_total_unrealized_pnl(self, current_price: float) -> float:
+        """Sum unrealized P&L across all open positions."""
+        total = 0.0
+        for pos in self.open_positions.values():
+            total += self.get_position_unrealized_pnl(pos, current_price)
+        return total
+
+    def get_worst_case_loss(self) -> float:
+        """Sum of max potential loss (SL hit) for all open positions."""
+        total = 0.0
+        for pos in self.open_positions.values():
+            sl_dist = pos.get("sl_distance", 0)
+            contracts = pos.get("contracts", 2)
+            if pos["phase"] == "runner":
+                contracts = 1  # runner is 1 contract
+            total += sl_dist * POINT_VALUE * contracts
+        return total
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -602,8 +644,14 @@ class DailyPnLTracker:
         key = self.get_today_key()
         self.daily_pnl[key] = self.daily_pnl.get(key, 0) + pnl
 
-    def can_take_trade(self, sl_distance: float, contracts: int = 2) -> bool:
-        """Check if a new trade is allowed under Smart Daily Loss."""
+    def can_take_trade(self, sl_distance: float, contracts: int = 2, open_worst_case: float = 0) -> bool:
+        """Check if a new trade is allowed under Smart Daily Loss.
+
+        Args:
+            sl_distance: SL distance for the new trade
+            contracts: Number of contracts for the new trade
+            open_worst_case: Sum of worst-case loss from all currently open positions
+        """
         key = self.get_today_key()
         current = self.daily_pnl.get(key, 0)
 
@@ -611,10 +659,11 @@ class DailyPnLTracker:
         if current <= -self.daily_loss_limit:
             return False
 
-        # Check if potential loss would exceed budget
-        potential_loss = sl_distance * POINT_VALUE * contracts
+        # Check if potential loss + open exposure would exceed budget
+        new_trade_loss = sl_distance * POINT_VALUE * contracts
+        total_exposure = open_worst_case + new_trade_loss
         remaining = self.daily_loss_limit + current
-        if potential_loss > remaining:
+        if total_exposure > remaining:
             return False
 
         return True

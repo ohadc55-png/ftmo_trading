@@ -138,23 +138,37 @@ def get_weekly_trades(week_start: str, week_end: str) -> list[dict]:
 # ── Position Operations ─────────────────────────────────────────────────
 
 def save_position(position: dict | None):
-    """Save or clear the current open position."""
+    """Save (upsert) a single position by ID. Pass None to clear all."""
     with get_db() as conn:
-        conn.execute("DELETE FROM positions")
-        if position:
+        if position is None:
+            conn.execute("DELETE FROM positions")
+        else:
             conn.execute(
-                "INSERT INTO positions (id, data) VALUES (?, ?)",
+                "INSERT OR REPLACE INTO positions (id, data) VALUES (?, ?)",
                 (position["id"], json.dumps(position))
             )
 
 
+def delete_position(pos_id: str):
+    """Delete a single position by ID."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM positions WHERE id = ?", (pos_id,))
+
+
 def get_position() -> dict | None:
-    """Get current open position, or None."""
+    """Get first open position, or None. (backward compat)"""
     with get_db() as conn:
         row = conn.execute("SELECT data FROM positions LIMIT 1").fetchone()
         if row:
             return json.loads(row["data"])
         return None
+
+
+def get_positions() -> list[dict]:
+    """Get all open positions."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT data FROM positions").fetchall()
+        return [json.loads(row["data"]) for row in rows]
 
 
 # ── Bot State Operations ────────────────────────────────────────────────
