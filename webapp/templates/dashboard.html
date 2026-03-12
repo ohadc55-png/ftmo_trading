@@ -44,34 +44,68 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans
 .section-title { font-size: 11px; font-weight: 600; color: var(--cyan);
     text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; }
 
-/* ── Active Position (Sidebar) ────────────────────────── */
+/* ── Active Positions (Sidebar) ───────────────────────── */
 .active-pos { margin-bottom: 24px; }
 .pos-empty { color: var(--muted); font-size: 14px; text-align: center; padding: 20px 0; }
-.pos-live { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
-.pos-live.long-border { border-left: 3px solid var(--green); }
-.pos-live.short-border { border-left: 3px solid var(--red); }
-.pos-dir-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.dir-badge { padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+
+/* Summary bar */
+.pos-summary { display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 8px; font-size: 12px; }
+.pos-summary-left { display: flex; align-items: center; gap: 8px; }
+.pos-summary .count-badge { background: var(--blue); color: #fff; font-size: 10px;
+    font-weight: 700; padding: 2px 7px; border-radius: 10px; min-width: 20px; text-align: center; }
+.pos-summary .show-all-btn { font-size: 10px; padding: 3px 8px; border-radius: 4px;
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    cursor: pointer; transition: all 0.15s; }
+.pos-summary .show-all-btn:hover, .pos-summary .show-all-btn.active { background: var(--blue);
+    color: #fff; border-color: var(--blue); }
+
+/* Position row (compact) */
+.pos-row { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    margin-bottom: 4px; overflow: hidden; transition: border-color 0.15s; cursor: pointer; }
+.pos-row:hover { border-color: rgba(36,99,235,0.4); }
+.pos-row.selected { border-color: var(--blue); box-shadow: 0 0 0 1px rgba(36,99,235,0.3); }
+.pos-row.long-accent { border-left: 3px solid var(--green); }
+.pos-row.short-accent { border-left: 3px solid var(--red); }
+
+.pos-row-header { display: flex; align-items: center; gap: 6px; padding: 10px 12px; user-select: none; }
+.pos-row-header .dir-badge { padding: 2px 8px; border-radius: 4px; font-size: 10px;
+    font-weight: 700; text-transform: uppercase; flex-shrink: 0; }
 .dir-badge.long { background: rgba(16,185,129,0.15); color: var(--green); }
 .dir-badge.short { background: rgba(239,68,68,0.15); color: var(--red); }
-.phase-tag { font-size: 10px; color: var(--muted); background: var(--bg); border: 1px solid var(--border);
-    padding: 2px 8px; border-radius: 4px; }
-.pos-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.pos-info-item .lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-.pos-info-item .val { font-size: 15px; font-weight: 700; font-family: 'SF Mono', monospace; }
-.pos-info-item .val.sm { font-size: 13px; }
+.pos-row-header .entry-price { font-family: 'SF Mono', monospace; font-size: 12px;
+    font-weight: 600; color: var(--text); }
+.pos-row-header .pos-pnl { font-family: 'SF Mono', monospace; font-size: 12px;
+    font-weight: 700; margin-left: auto; }
+.pos-row-header .tier-tag { font-size: 9px; color: var(--blue); font-weight: 600; }
+.pos-row-header .phase-tag { font-size: 9px; color: var(--muted); background: var(--card);
+    border: 1px solid var(--border); padding: 1px 6px; border-radius: 3px; }
+.pos-row-header .chevron { color: var(--muted); font-size: 10px; margin-left: 4px;
+    transition: transform 0.2s; }
+.pos-row.selected .chevron { transform: rotate(180deg); }
+
+/* Position detail dropdown */
+.pos-detail { display: none; padding: 0 12px 12px; }
+.pos-row.selected .pos-detail { display: block; }
+.pos-detail-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.pos-detail-item .lbl { font-size: 8px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.5px; }
+.pos-detail-item .val { font-size: 13px; font-weight: 600; font-family: 'SF Mono', monospace; }
 
 /* SL/TP Visual Bar */
-.sl-tp-bar { margin-top: 10px; }
-.sl-tp-labels { display: flex; justify-content: space-between; font-size: 10px; margin-bottom: 4px; }
-.sl-tp-track { height: 6px; background: var(--border); border-radius: 3px; position: relative; overflow: visible; }
-.sl-tp-fill { height: 100%; border-radius: 3px; position: absolute; top: 0; }
-.sl-tp-fill.loss { background: rgba(239,68,68,0.4); left: 0; }
-.sl-tp-fill.profit { background: rgba(16,185,129,0.4); right: 0; }
-.sl-tp-marker { position: absolute; top: -3px; width: 3px; height: 12px; border-radius: 2px;
+.sl-tp-bar { margin-top: 6px; }
+.sl-tp-labels { display: flex; justify-content: space-between; font-size: 9px; margin-bottom: 3px; }
+.sl-tp-track { height: 5px; background: var(--border); border-radius: 3px; position: relative; overflow: visible; }
+.sl-tp-marker { position: absolute; top: -3px; width: 3px; height: 11px; border-radius: 2px;
     transform: translateX(-50%); }
 .sl-tp-marker.entry-m { background: var(--blue); }
 .sl-tp-marker.current-m { background: #fff; }
+
+/* Score mini-bar */
+.score-bar { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+.score-bar .score-seg { height: 3px; border-radius: 2px; flex: 1; }
+.score-bar .score-lbl { font-size: 8px; color: var(--muted); min-width: 22px; }
 
 /* ── Performance Cards ────────────────────────────────── */
 .perf-section { margin-bottom: 20px; }
@@ -155,7 +189,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 <!-- ════ Header ════ -->
 <div class="header">
     <div class="header-left">
-        <div class="header-title">NQ <span>Paper Trader</span> V2 (Tiered)</div>
+        <div class="header-title">NQ <span>Paper Trader</span> V3</div>
         <div class="tf-pills" id="tfPills">
             <div class="tf-pill active" data-tf="5" data-label="5m">5m</div>
             <div class="tf-pill" data-tf="15" data-label="15m">15m</div>
@@ -338,76 +372,14 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 <!-- ──── Right: Sidebar ──── -->
 <div class="sidebar">
 
-    <!-- Active Position -->
+    <!-- Active Positions -->
     <div class="active-pos">
-        <div class="section-title">Active Position</div>
+        <div class="section-title">Active Positions</div>
         <div id="positionContent">
-        {% if position %}
-        <div class="pos-live {{ 'long-border' if position.direction == 'buy' else 'short-border' }}">
-            <div class="pos-dir-row">
-                <span class="dir-badge {{ 'long' if position.direction == 'buy' else 'short' }}">
-                    {{ 'LONG' if position.direction == 'buy' else 'SHORT' }}
-                </span>
-                <span class="phase-tag">{{ position.phase | upper }}</span>
-                <span style="color:var(--muted);font-size:11px;margin-left:auto;">{{ position.bars_held }} bars</span>
-            </div>
-            <div class="pos-info-grid">
-                <div class="pos-info-item">
-                    <div class="lbl">Entry</div>
-                    <div class="val font-mono">{{ '{:,.2f}'.format(position.entry_price) }}</div>
-                </div>
-                <div class="pos-info-item">
-                    <div class="lbl">Current</div>
-                    <div class="val font-mono {{ 'green' if current_price and ((position.direction == 'buy' and current_price > position.entry_price) or (position.direction == 'sell' and current_price < position.entry_price)) else 'red' }}" id="currentPrice">
-                        {{ '{:,.2f}'.format(current_price) if current_price else '---' }}
-                    </div>
-                </div>
-                <div class="pos-info-item">
-                    <div class="lbl">Unrealized</div>
-                    <div class="val {{ 'green' if unrealized and unrealized > 0 else 'red' }}" id="unrealizedPnl">
-                        {{ '${:+,.0f}'.format(unrealized) if unrealized else '$0' }}
-                    </div>
-                </div>
-                <div class="pos-info-item">
-                    <div class="lbl">Score</div>
-                    <div class="val sm blue">{{ position.score }}</div>
-                </div>
-            </div>
-
-            <!-- SL / TP visual bar -->
-            <div class="sl-tp-bar">
-                <div class="sl-tp-labels">
-                    <span class="red font-mono">SL {{ '{:,.2f}'.format(position.sl_price) }}</span>
-                    {% if position.phase == 'runner' and position.runner_sl %}
-                    <span class="font-mono" style="color:var(--orange)">Trail {{ '{:,.2f}'.format(position.runner_sl) }}</span>
-                    {% endif %}
-                    <span class="green font-mono">TP {{ '{:,.2f}'.format(position.tp_price) }}</span>
-                </div>
-                {% set sl = position.sl_price %}
-                {% set tp = position.tp_price %}
-                {% set entry = position.entry_price %}
-                {% set rng = (tp - sl) if tp > sl else (sl - tp) %}
-                {% if rng > 0 %}
-                    {% set entry_pct = ((entry - (sl if sl < tp else tp)) / rng * 100) %}
-                    {% set cur_pct = (((current_price or entry) - (sl if sl < tp else tp)) / rng * 100) if current_price else entry_pct %}
-                <div class="sl-tp-track">
-                    <div class="sl-tp-marker entry-m" style="left:{{ entry_pct | int }}%"></div>
-                    <div class="sl-tp-marker current-m" style="left:{{ cur_pct | int }}%"></div>
-                </div>
-                {% endif %}
-            </div>
-
-            {% if position.phase == 'runner' %}
-            <div style="margin-top:10px;padding:8px;background:rgba(6,182,212,0.08);border-radius:6px;font-size:11px;">
-                <div style="color:var(--cyan);font-weight:600;margin-bottom:4px;">Runner Active</div>
-                <div style="color:var(--muted)">TP1 P&L: <span class="green">${{ '{:+,.0f}'.format(position.tp1_pnl) }}</span></div>
-                <div style="color:var(--muted)">Trail: <span style="color:var(--orange)">{{ '{:,.2f}'.format(position.runner_sl) }}</span> | Extreme: {{ '{:,.2f}'.format(position.runner_extreme) }}</div>
-                <div style="color:var(--muted)">Runner bars: {{ position.runner_bars }} / 120</div>
-            </div>
-            {% endif %}
-        </div>
+        {% if positions and positions|length > 0 %}
+        <div class="pos-empty" style="color:var(--muted);font-size:11px;padding:4px 0;">Loading...</div>
         {% else %}
-        <div class="pos-empty">No open position</div>
+        <div class="pos-empty">No open positions</div>
         {% endif %}
         </div>
     </div>
@@ -447,7 +419,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
                 <div><span style="color:var(--muted)">T2</span></div>
                 <div>SL&le;50, 1c (no runner)</div>
                 <div><span style="color:var(--muted)">Smart DL</span></div>
-                <div>$1,100/day</div>
+                <div style="color:var(--muted)">Disabled</div>
                 <div><span style="color:var(--muted)">Hours</span></div>
                 <div>07:00-23:00 ET</div>
                 <div><span style="color:var(--muted)">Threshold</span></div>
@@ -462,7 +434,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 
 <!-- Footer -->
 <div class="footer">
-    NQ Futures Paper Trading Bot v2.0 | Tiered T1+T2 | DL$1,100 | Data: Yahoo Finance (5m, 60d) | Auto-refresh: 30s
+    NQ Futures Paper Trading Bot v3.0 | Tiered T1+T2 | Multi-Position | Data: Yahoo Finance (5m, 60d) | Auto-refresh: 30s
 </div>
 
 <!-- ════ Scripts ════ -->
@@ -566,9 +538,17 @@ setInterval(async () => {
     } catch(e) { console.error('refresh error', e); }
 }, 30000);
 
+let _selectedPosId = null;  // currently selected/expanded position
+let _showAllLines = true;   // show all lines on chart
+let _cachedPositions = [];  // cached for chart line updates
+let _cachedPrice = null;
+
 function updatePositionsSidebar(positions, price, totalUnrealized) {
     const container = document.getElementById('positionContent');
     if (!container) return;
+
+    _cachedPositions = positions || [];
+    _cachedPrice = price;
 
     if (!positions || positions.length === 0) {
         container.innerHTML = '<div class="pos-empty">No open positions</div>';
@@ -580,44 +560,59 @@ function updatePositionsSidebar(positions, price, totalUnrealized) {
 
     let html = '';
 
-    // Summary header if multiple positions
-    if (positions.length > 1) {
-        const unrCls = totalUnrealized >= 0 ? 'green' : 'red';
-        html += '<div style="padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;font-size:12px;">';
-        html += '<span style="color:var(--muted)">' + positions.length + ' positions open</span>';
-        html += ' &nbsp;|&nbsp; <span class="' + unrCls + '">' + fmtPnl(totalUnrealized || 0) + ' total</span>';
-        html += '</div>';
-    }
+    // Summary bar
+    const totalUnr = totalUnrealized || positions.reduce((s, p) => s + (p.unrealized || 0), 0);
+    const unrCls = totalUnr >= 0 ? 'green' : 'red';
+    html += '<div class="pos-summary">';
+    html += '<div class="pos-summary-left">';
+    html += '<span class="count-badge">' + positions.length + '</span>';
+    html += '<span style="color:var(--muted);font-size:11px;">positions</span>';
+    html += '<span class="font-mono ' + unrCls + '" style="font-size:13px;font-weight:700;">' + fmtPnl(totalUnr) + '</span>';
+    html += '</div>';
+    html += '<button class="show-all-btn' + (_showAllLines ? ' active' : '') + '" onclick="toggleShowAll()" title="Show all position lines on chart">ALL</button>';
+    html += '</div>';
 
+    // Position rows
     for (const pos of positions) {
         const isLong = pos.direction === 'buy';
         const dir = isLong ? 'LONG' : 'SHORT';
         const dirCls = isLong ? 'long' : 'short';
-        const posUnr = pos.unrealized != null ? pos.unrealized : (totalUnrealized || 0);
-        const priceInProfit = price && ((isLong && price > pos.entry_price) || (!isLong && price < pos.entry_price));
+        const posUnr = pos.unrealized != null ? pos.unrealized : 0;
         const unrCls = posUnr > 0 ? 'green' : 'red';
-        const priceCls = priceInProfit ? 'green' : 'red';
-
+        const isSelected = _selectedPosId === pos.id;
         const sl = pos.sl_price, tp = pos.tp_price, entry = pos.entry_price;
         const rng = Math.abs(tp - sl);
         const minP = Math.min(sl, tp);
-        const entryPct = rng > 0 ? Math.round((entry - minP) / rng * 100) : 50;
-        const curPct = rng > 0 && price ? Math.round(((price || entry) - minP) / rng * 100) : entryPct;
+        const entryPct = rng > 0 ? Math.max(0, Math.min(100, Math.round((entry - minP) / rng * 100))) : 50;
+        const curPct = rng > 0 && price ? Math.max(0, Math.min(100, Math.round((price - minP) / rng * 100))) : entryPct;
+        const time = pos.entry_time ? pos.entry_time.substring(11, 16) : '';
 
-        html += '<div class="pos-live ' + dirCls + '-border" style="margin-bottom:8px;">';
-        html += '<div class="pos-dir-row">';
+        html += '<div class="pos-row ' + dirCls + '-accent' + (isSelected ? ' selected' : '') + '" data-pos-id="' + pos.id + '" onclick="selectPosition(\'' + pos.id + '\')">';
+
+        // Compact row header
+        html += '<div class="pos-row-header">';
         html += '<span class="dir-badge ' + dirCls + '">' + dir + '</span>';
+        html += '<span class="entry-price">' + fmt(entry) + '</span>';
+        html += '<span class="tier-tag">T' + (pos.tier || 1) + '</span>';
         html += '<span class="phase-tag">' + (pos.phase || 'active').toUpperCase() + '</span>';
-        html += '<span style="color:var(--blue);font-size:10px;margin-left:4px;">T' + (pos.tier || 1) + '</span>';
-        html += '<span style="color:var(--muted);font-size:11px;margin-left:auto;">' + (pos.bars_held || 0) + ' bars</span>';
-        html += '</div>';
-        html += '<div class="pos-info-grid">';
-        html += '<div class="pos-info-item"><div class="lbl">Entry</div><div class="val font-mono">' + fmt(entry) + '</div></div>';
-        html += '<div class="pos-info-item"><div class="lbl">Current</div><div class="val font-mono ' + priceCls + '">' + (price ? fmt(price) : '---') + '</div></div>';
-        html += '<div class="pos-info-item"><div class="lbl">Unrealized</div><div class="val ' + unrCls + '">' + fmtPnl(posUnr) + '</div></div>';
-        html += '<div class="pos-info-item"><div class="lbl">Score</div><div class="val sm blue">' + (pos.score || 0) + '</div></div>';
+        html += '<span class="pos-pnl ' + unrCls + '">' + fmtPnl(posUnr) + '</span>';
+        html += '<span class="chevron">&#9660;</span>';
         html += '</div>';
 
+        // Expandable detail section
+        html += '<div class="pos-detail">';
+
+        // Detail grid
+        html += '<div class="pos-detail-grid">';
+        html += '<div class="pos-detail-item"><div class="lbl">Entry Time</div><div class="val" style="font-size:11px;">' + time + '</div></div>';
+        html += '<div class="pos-detail-item"><div class="lbl">Current</div><div class="val ' + (price && ((isLong && price > entry) || (!isLong && price < entry)) ? 'green' : 'red') + '">' + (price ? fmt(price) : '---') + '</div></div>';
+        html += '<div class="pos-detail-item"><div class="lbl">Bars</div><div class="val" style="color:var(--muted)">' + (pos.bars_held || 0) + '</div></div>';
+        html += '<div class="pos-detail-item"><div class="lbl">SL</div><div class="val red">' + fmt(sl) + '</div></div>';
+        html += '<div class="pos-detail-item"><div class="lbl">TP</div><div class="val green">' + fmt(tp) + '</div></div>';
+        html += '<div class="pos-detail-item"><div class="lbl">Score</div><div class="val blue">' + (pos.score || 0) + '</div></div>';
+        html += '</div>';
+
+        // SL/TP visual bar
         html += '<div class="sl-tp-bar"><div class="sl-tp-labels">';
         html += '<span class="red font-mono">SL ' + fmt(sl) + '</span>';
         if (pos.phase === 'runner' && pos.runner_sl) {
@@ -633,18 +628,100 @@ function updatePositionsSidebar(positions, price, totalUnrealized) {
         }
         html += '</div>';
 
+        // Score breakdown mini-bars
+        const mtf = pos.mtf_score || 0, vol = pos.vol_score || 0, brk = pos.brk_score || 0;
+        html += '<div class="score-bar">';
+        html += '<span class="score-lbl">MTF</span><div class="score-seg" style="background:var(--cyan);opacity:' + (mtf/10) + ';"></div>';
+        html += '<span class="score-lbl">VOL</span><div class="score-seg" style="background:var(--purple);opacity:' + Math.max(0.1, vol/10) + ';"></div>';
+        html += '<span class="score-lbl">BRK</span><div class="score-seg" style="background:var(--orange);opacity:' + (brk/10) + ';"></div>';
+        html += '</div>';
+
+        // Runner info
         if (pos.phase === 'runner') {
-            html += '<div style="margin-top:10px;padding:8px;background:rgba(6,182,212,0.08);border-radius:6px;font-size:11px;">';
-            html += '<div style="color:var(--cyan);font-weight:600;margin-bottom:4px;">Runner Active</div>';
-            html += '<div style="color:var(--muted)">TP1 P&L: <span class="green">' + fmtPnl(pos.tp1_pnl || 0) + '</span></div>';
-            html += '<div style="color:var(--muted)">Trail: <span style="color:var(--orange)">' + fmt(pos.runner_sl || 0) + '</span> | Extreme: ' + fmt(pos.runner_extreme || 0) + '</div>';
-            html += '<div style="color:var(--muted)">Runner bars: ' + (pos.runner_bars || 0) + ' / 120</div>';
+            html += '<div style="margin-top:8px;padding:6px 8px;background:rgba(6,182,212,0.08);border-radius:6px;font-size:10px;">';
+            html += '<span style="color:var(--cyan);font-weight:600;">Runner</span>';
+            html += ' &middot; TP1: <span class="green">' + fmtPnl(pos.tp1_pnl || 0) + '</span>';
+            html += ' &middot; Trail: <span style="color:var(--orange)">' + fmt(pos.runner_sl || 0) + '</span>';
+            html += ' &middot; ' + (pos.runner_bars || 0) + '/120 bars';
             html += '</div>';
         }
-        html += '</div>';
+
+        html += '</div>'; // pos-detail
+        html += '</div>'; // pos-row
     }
     container.innerHTML = html;
 }
+
+function selectPosition(posId) {
+    if (_selectedPosId === posId) {
+        _selectedPosId = null;  // toggle off
+    } else {
+        _selectedPosId = posId;
+    }
+    // Re-render sidebar to update selected state
+    updatePositionsSidebar(_cachedPositions, _cachedPrice, null);
+    // Update chart lines to highlight selected
+    highlightPositionLines();
+}
+
+function toggleShowAll() {
+    _showAllLines = !_showAllLines;
+    // Re-render sidebar to update button state
+    updatePositionsSidebar(_cachedPositions, _cachedPrice, null);
+    highlightPositionLines();
+}
+
+function highlightPositionLines() {
+    // Remove old lines
+    posLines.forEach(line => candleSeries.removePriceLine(line));
+    posLines = [];
+
+    const positions = _cachedPositions;
+    if (!positions || positions.length === 0) return;
+
+    const hasSelection = _selectedPosId != null;
+
+    positions.forEach((pos, idx) => {
+        const isSelected = pos.id === _selectedPosId;
+        // Show this position's lines?
+        const show = _showAllLines || isSelected || !hasSelection;
+        if (!show) return;
+
+        const dimmed = hasSelection && !isSelected;
+        const alpha = dimmed ? 0.2 : 1;
+        const slColor = dimmed ? 'rgba(239,68,68,0.2)' : '#ef4444';
+        const tpColor = dimmed ? 'rgba(16,185,129,0.2)' : '#10b981';
+        const entryColor = dimmed ? 'rgba(36,99,235,0.2)' : '#2463eb';
+        const lineWidth = isSelected ? 2 : 1;
+        const label = positions.length > 1 ? ' #' + (idx + 1) : '';
+
+        posLines.push(candleSeries.createPriceLine({
+            price: pos.sl_price, color: slColor, lineWidth: lineWidth,
+            lineStyle: LightweightCharts.LineStyle.Dashed,
+            axisLabelVisible: !dimmed, title: dimmed ? '' : 'SL' + label,
+        }));
+        posLines.push(candleSeries.createPriceLine({
+            price: pos.tp_price, color: tpColor, lineWidth: lineWidth,
+            lineStyle: LightweightCharts.LineStyle.Dashed,
+            axisLabelVisible: !dimmed, title: dimmed ? '' : 'TP' + label,
+        }));
+        posLines.push(candleSeries.createPriceLine({
+            price: pos.entry_price, color: entryColor, lineWidth: lineWidth,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+            axisLabelVisible: !dimmed, title: dimmed ? '' : 'Entry' + label,
+        }));
+
+        if (pos.phase === 'runner' && pos.runner_sl) {
+            const trailColor = dimmed ? 'rgba(245,158,11,0.2)' : '#f59e0b';
+            posLines.push(candleSeries.createPriceLine({
+                price: pos.runner_sl, color: trailColor, lineWidth: lineWidth,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: !dimmed, title: dimmed ? '' : 'Trail' + label,
+            }));
+        }
+    });
+}
+
 // Backward compat alias
 function updatePositionSidebar(pos, price, unrealized) {
     updatePositionsSidebar(pos ? [pos] : [], price, unrealized);
@@ -815,74 +892,22 @@ function updatePositionLines(positions) {
     if (positions && !Array.isArray(positions)) positions = [positions];
     if (!positions) positions = [];
 
-    // Remove old lines
-    posLines.forEach(line => candleSeries.removePriceLine(line));
-    posLines = [];
-
-    // If no positions, show faded lines from last known
-    const showPositions = positions.length > 0 ? positions : _lastKnownPositions;
-    const isClosed = positions.length === 0 && _lastKnownPositions.length > 0;
-
-    if (showPositions.length === 0) { lastPosIds.clear(); return; }
-
-    // Remember positions for after they close
+    // Remember for highlighting
     if (positions.length > 0) _lastKnownPositions = positions.map(p => ({...p}));
 
-    // Color palette for multiple positions
-    const colors = [
-        {sl: '#ef4444', tp: '#10b981', entry: '#2463eb', trail: '#f59e0b'},
-        {sl: '#f87171', tp: '#34d399', entry: '#60a5fa', trail: '#fbbf24'},
-        {sl: '#fca5a5', tp: '#6ee7b7', entry: '#93c5fd', trail: '#fcd34d'},
-    ];
-
-    const markers = [];
+    // Entry markers for new positions
+    const markers = [...getBlockedMarkers()];
     const newIds = new Set();
 
-    showPositions.forEach((pos, idx) => {
-        const c = colors[Math.min(idx, colors.length - 1)];
-        const alpha = isClosed ? 0.35 : 1;
-        const applyAlpha = (hex) => isClosed ? hex.replace('#', 'rgba(') + ',0.35)' : hex;
-        // For simplicity, just dim if closed
-        const slColor = isClosed ? 'rgba(239,68,68,0.35)' : c.sl;
-        const tpColor = isClosed ? 'rgba(16,185,129,0.35)' : c.tp;
-        const entryColor = isClosed ? 'rgba(36,99,235,0.35)' : c.entry;
-        const label = showPositions.length > 1 ? ' #' + (idx + 1) : '';
-
-        posLines.push(candleSeries.createPriceLine({
-            price: pos.sl_price, color: slColor, lineWidth: 1,
-            lineStyle: LightweightCharts.LineStyle.Dashed,
-            axisLabelVisible: true, title: 'SL' + label,
-        }));
-        posLines.push(candleSeries.createPriceLine({
-            price: pos.tp_price, color: tpColor, lineWidth: 1,
-            lineStyle: LightweightCharts.LineStyle.Dashed,
-            axisLabelVisible: true, title: 'TP' + label,
-        }));
-        posLines.push(candleSeries.createPriceLine({
-            price: pos.entry_price, color: entryColor, lineWidth: 1,
-            lineStyle: LightweightCharts.LineStyle.Dotted,
-            axisLabelVisible: true, title: 'Entry' + label,
-        }));
-
-        if (pos.phase === 'runner' && pos.runner_sl) {
-            const trailColor = isClosed ? 'rgba(245,158,11,0.35)' : c.trail;
-            posLines.push(candleSeries.createPriceLine({
-                price: pos.runner_sl, color: trailColor, lineWidth: 1,
-                lineStyle: LightweightCharts.LineStyle.Dashed,
-                axisLabelVisible: true, title: 'Trail' + label,
-            }));
-        }
-
-        // Entry markers
+    positions.forEach(pos => {
         newIds.add(pos.id);
         if (!lastPosIds.has(pos.id) && pos.entry_time) {
             const entryEpoch = Math.floor(new Date(pos.entry_time).getTime() / 1000) + tzOffsetSec;
             const isLong = pos.direction === 'buy';
-            const markerColor = isClosed ? (isLong ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)') : (isLong ? '#10b981' : '#ef4444');
             markers.push({
                 time: entryEpoch,
                 position: isLong ? 'belowBar' : 'aboveBar',
-                color: markerColor,
+                color: isLong ? '#10b981' : '#ef4444',
                 shape: isLong ? 'arrowUp' : 'arrowDown',
                 text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + pos.entry_price.toFixed(2),
             });
@@ -890,11 +915,13 @@ function updatePositionLines(positions) {
     });
 
     if (markers.length > 0) {
-        markers.push(...getBlockedMarkers());
         markers.sort((a, b) => a.time - b.time);
         markerSeries.setMarkers(markers);
     }
     lastPosIds = newIds;
+
+    // Use the highlight system for lines
+    highlightPositionLines();
 }
 
 // ── Blocked signal markers (gray) ──
@@ -915,9 +942,21 @@ window._blockedSignals = blockedSignals;
 
 // Initial positions from server render
 {% if positions %}
-updatePositionLines({{ positions | tojson }});
+const _initPositions = {{ positions | tojson }};
+const _initPrice = {{ current_price or 'null' }};
+const _initUnr = {{ unrealized or 'null' }};
+_cachedPositions = _initPositions;
+_cachedPrice = _initPrice;
+updatePositionsSidebar(_initPositions, _initPrice, _initUnr);
+updatePositionLines(_initPositions);
 {% elif position %}
-updatePositionLines([{{ position | tojson }}]);
+const _initPositions = [{{ position | tojson }}];
+const _initPrice = {{ current_price or 'null' }};
+const _initUnr = {{ unrealized or 'null' }};
+_cachedPositions = _initPositions;
+_cachedPrice = _initPrice;
+updatePositionsSidebar(_initPositions, _initPrice, _initUnr);
+updatePositionLines(_initPositions);
 {% endif %}
 
 // Chart info
