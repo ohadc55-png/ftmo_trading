@@ -477,6 +477,22 @@ def seed_trade():
     return jsonify({"ok": True, "trade_id": trade["id"]})
 
 
+@app.route("/api/admin/cleanup-positions", methods=["POST"])
+def cleanup_positions():
+    """Remove invalid positions from DB and memory (admin only)."""
+    data = request.get_json()
+    if not data or data.get("secret") != "nq_seed_2026":
+        return jsonify({"error": "unauthorized"}), 403
+    removed = []
+    for pos_id in list(pos_mgr.open_positions.keys()):
+        pos = pos_mgr.open_positions[pos_id]
+        if not pos.get("entry_price") or not pos.get("direction"):
+            del pos_mgr.open_positions[pos_id]
+            delete_position(pos_id)
+            removed.append(pos_id)
+    return jsonify({"ok": True, "removed": removed})
+
+
 @app.route("/api/admin/delete-trade", methods=["POST"])
 def delete_trade():
     """Delete a trade by ID (admin only)."""

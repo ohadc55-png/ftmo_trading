@@ -595,8 +595,10 @@ class PositionManager:
 
     def get_position_unrealized_pnl(self, pos: dict, current_price: float) -> float:
         """Calculate unrealized P&L for a single position."""
-        entry = pos["entry_price"]
-        direction = pos["direction"]
+        entry = pos.get("entry_price")
+        direction = pos.get("direction")
+        if not entry or not direction:
+            return 0.0
         contracts = pos.get("contracts", 2)
 
         if pos["phase"] == "active":
