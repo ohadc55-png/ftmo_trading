@@ -451,6 +451,22 @@ def _build_equity_data(trades: list[dict]) -> list[dict]:
     return data
 
 
+@app.route("/api/admin/seed-trade", methods=["POST"])
+def seed_trade():
+    """Seed a historical trade into the database (admin only)."""
+    data = request.get_json()
+    if not data or "secret" not in data or data["secret"] != "nq_seed_2026":
+        return jsonify({"error": "unauthorized"}), 403
+
+    trade = data.get("trade")
+    if not trade:
+        return jsonify({"error": "missing trade data"}), 400
+
+    save_trade(trade)
+    logger.info(f"Seeded trade: {trade['direction']} @ {trade['entry_price']} | {trade.get('outcome')}")
+    return jsonify({"ok": True, "trade_id": trade["id"]})
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════════
