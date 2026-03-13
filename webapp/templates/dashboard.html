@@ -189,7 +189,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 <!-- ════ Header ════ -->
 <div class="header">
     <div class="header-left">
-        <div class="header-title">NQ <span>Paper Trader</span> V3</div>
+        <div class="header-title">NQ <span>Paper Trader</span> V4.1</div>
         <div class="tf-pills" id="tfPills">
             <div class="tf-pill active" data-tf="1" data-label="1m">1m</div>
             <div class="tf-pill" data-tf="5" data-label="5m">5m</div>
@@ -224,6 +224,23 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
         <div id="priceChart" style="height:350px;"></div>
     </div>
 
+    <!-- Account Balance -->
+    {% set account_balance = 100000 + stats.total_pnl %}
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;">
+        <div>
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;">Account Balance</div>
+            <div style="font-size:28px;font-weight:700;font-family:'SF Mono',monospace;" class="{{ 'green' if account_balance >= 100000 else ('red' if account_balance < 95000 else 'white') }}" id="accountBalance">
+                {{ '${:,.0f}'.format(account_balance) }}
+            </div>
+        </div>
+        <div style="text-align:right;">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;">Total P&L</div>
+            <div style="font-size:20px;font-weight:700;font-family:'SF Mono',monospace;" class="{{ 'green' if stats.total_pnl >= 0 else 'red' }}" id="totalPnl">
+                {{ '${:+,.0f}'.format(stats.total_pnl) }}
+            </div>
+        </div>
+    </div>
+
     <!-- Performance -->
     <div class="perf-section">
         <div class="section-title">Performance</div>
@@ -235,10 +252,6 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
             <div class="perf-card">
                 <div class="lbl">Profit Factor</div>
                 <div class="val {{ 'green' if stats.profit_factor >= 1.5 else ('red' if stats.profit_factor < 1 else 'white') }}" id="profitFactor">{{ '{:.2f}'.format(stats.profit_factor) }}</div>
-            </div>
-            <div class="perf-card">
-                <div class="lbl">Total P&L</div>
-                <div class="val {{ 'green' if stats.total_pnl >= 0 else 'red' }}" id="totalPnl">{{ '${:+,.0f}'.format(stats.total_pnl) }}</div>
             </div>
             <div class="perf-card">
                 <div class="lbl">Trades</div>
@@ -436,7 +449,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 
 <!-- Footer -->
 <div class="footer">
-    NQ Futures Paper Trading Bot v3.0 | Tiered T1+T2 | Multi-Position | Data: Yahoo Finance (5m, 60d) | Auto-refresh: 10s
+    NQ Futures Paper Trading Bot v4.1 | Tiered T1+T2 | Multi-Position | Data: Databento (CME) + YF fallback | Auto-refresh: 10s
 </div>
 
 <!-- ════ Scripts ════ -->
@@ -468,10 +481,16 @@ setInterval(async () => {
             un.className = 'val ' + (d.unrealized>=0?'green':'red');
         }
 
-        // Performance cards
+        // Account balance + Total P&L
+        const ab = document.getElementById('accountBalance');
+        const acctBal = 100000 + (d.total_pnl || 0);
+        if (ab) {
+            ab.textContent = '$' + Math.round(acctBal).toLocaleString();
+            ab.className = acctBal >= 100000 ? 'green' : (acctBal < 95000 ? 'red' : 'white');
+        }
         const tp = document.getElementById('totalPnl');
         if (tp) { tp.textContent = (d.total_pnl>=0?'+':'') + '$' + Math.round(d.total_pnl).toLocaleString();
-            tp.className = 'val ' + (d.total_pnl>=0?'green':'red'); }
+            tp.className = (d.total_pnl>=0?'green':'red'); }
         const wr = document.getElementById('winRate');
         if (wr) wr.textContent = d.win_rate + '%';
         const pf = document.getElementById('profitFactor');

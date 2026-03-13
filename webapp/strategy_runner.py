@@ -56,11 +56,6 @@ RUNNER_MAX_BARS = 120
 SL_ATR_MULT = 1.5
 TRAIL_ATR_MULT = 1.5
 
-# Session close: force-close all positions at this time (ET).
-# No overnight carry — trades opened today must close today.
-SESSION_CLOSE_HOUR = 19
-SESSION_CLOSE_MINUTE = 55
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Strategy Runner
@@ -451,12 +446,6 @@ class StrategyRunner:
             })
         return candles
 
-    def is_session_close_time(self) -> bool:
-        """Check if current time is at or past session close (19:55 ET)."""
-        now = datetime.now(ET)
-        return now.hour > SESSION_CLOSE_HOUR or (
-            now.hour == SESSION_CLOSE_HOUR and now.minute >= SESSION_CLOSE_MINUTE
-        )
 
 
 def _apply_cooldown(eligible, scores, threshold):
