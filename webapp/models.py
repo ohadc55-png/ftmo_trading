@@ -66,6 +66,21 @@ def init_db():
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS blocked_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                direction TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                sl_distance REAL NOT NULL,
+                bar_time TEXT NOT NULL,
+                score REAL,
+                tier INTEGER DEFAULT 1,
+                reason TEXT NOT NULL,
+                daily_pnl REAL DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_blocked_bar_time
+                ON blocked_signals(bar_time);
+
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time
                 ON trades(entry_time);
             CREATE INDEX IF NOT EXISTS idx_trades_outcome
@@ -101,6 +116,25 @@ def save_trade(trade: dict):
             trade.get("runner_exit_price"), trade.get("runner_pnl"),
             trade.get("runner_outcome"), trade.get("account_after"),
             trade.get("tier", 1),
+        ))
+
+
+def save_blocked_signal(signal: dict, reason: str, daily_pnl: float = 0):
+    """Persist a blocked signal to the DB for historical analysis."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO blocked_signals
+            (direction, entry_price, sl_distance, bar_time, score, tier, reason, daily_pnl)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            signal.get("direction", ""),
+            signal.get("entry_price", 0),
+            signal.get("sl_distance", 0),
+            signal.get("bar_time", ""),
+            signal.get("score", 0),
+            signal.get("tier", 1),
+            reason,
+            daily_pnl,
         ))
 
 

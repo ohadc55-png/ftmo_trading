@@ -25,7 +25,7 @@ from webapp.models import (
     init_db, save_trade, get_trades, get_today_trades,
     save_position, get_position, get_positions, delete_position,
     save_state, get_state,
-    get_all_stats,
+    get_all_stats, save_blocked_signal,
 )
 from webapp.strategy_runner import (
     StrategyRunner, PositionManager, DailyPnLTracker,
@@ -83,6 +83,24 @@ def is_market_hours() -> bool:
     return 7 <= now.hour < 23
 
 
+def is_futures_open() -> bool:
+    """Check if NQ futures are actually trading (nearly 24h on weekdays).
+
+    Used for position management — SL/TP must be checked whenever futures trade.
+    Futures halt daily 17:00-18:00 ET and are closed Sat.
+    """
+    now = datetime.now(ET)
+    wd = now.weekday()
+    if wd == 5:  # Saturday
+        return False
+    if wd == 6:  # Sunday — opens 18:00 ET
+        return now.hour >= 18
+    if wd == 4:  # Friday — closes 17:00 ET
+        return now.hour < 17
+    # Mon-Thu: halt 17:00-18:00 ET
+    return not (now.hour == 17)
+
+
 def strategy_loop():
     """Background thread: polls every 5 minutes during market hours."""
     bot_status["running"] = True
@@ -96,8 +114,8 @@ def strategy_loop():
         try:
             _wait_for_next_bar()
 
-            if not is_market_hours():
-                logger.debug("Market closed, sleeping...")
+            if not is_futures_open():
+                logger.debug("Futures closed, sleeping...")
                 time.sleep(60)
                 continue
 
@@ -160,46 +178,34 @@ def _run_cycle():
         if age > 900:
             logger.warning(f"Data stale: latest bar is {age/60:.0f} min old")
 
-    # 3. Update ALL open positions on new bar
+    # 3. Session close check: force-close all positions at 19:55 ET
+    #    No overnight carry — prevents the bug where positions held overnight
+    #    get stopped out by overnight price moves.
+    if pos_mgr.has_open_position() and runner.is_session_close_time():
+        logger.info("SESSION CLOSE (19:55 ET) — force-closing all open positions")
+        _force_close_all_positions(current_price)
+
+    # 4. Update ALL open positions on new bar
     if pos_mgr.has_open_position() and last_bar:
         closed_positions = pos_mgr.update_all_on_bar(last_bar)
 
         # Process all positions that just closed
         for closed_pos, event in closed_positions:
-            pnl_tracker.record_pnl(closed_pos["total_pnl"])
-            tier = closed_pos.get("tier", 1)
-            save_trade({
-                "id": closed_pos["id"],
-                "direction": closed_pos["direction"],
-                "entry_price": closed_pos["entry_price"],
-                "exit_price": closed_pos.get("exit_price"),
-                "sl_price": closed_pos["sl_price"],
-                "tp_price": closed_pos["tp_price"],
-                "sl_distance": closed_pos["sl_distance"],
-                "entry_time": closed_pos["entry_time"],
-                "exit_time": closed_pos.get("exit_time"),
-                "score": closed_pos["score"],
-                "outcome": closed_pos.get("outcome", ""),
-                "pnl_dollars": closed_pos["total_pnl"],
-                "pnl_points": closed_pos.get("pnl_points", 0),
-                "bars_held": closed_pos.get("bars_held", 0),
-                "contracts": closed_pos.get("contracts", 2),
-                "runner_exit_price": closed_pos.get("runner_exit_price"),
-                "runner_pnl": closed_pos.get("runner_pnl"),
-                "runner_outcome": closed_pos.get("runner_outcome"),
-                "account_after": closed_pos.get("account_after"),
-                "tier": tier,
-            })
-            delete_position(closed_pos["id"])
-            logger.info(f"Trade saved to DB: {closed_pos['outcome']} ${closed_pos['total_pnl']:+,.0f}")
+            _save_closed_trade(closed_pos)
 
-    # 4. Save all open position states
+    # 5. Save all open position states
     for pos in pos_mgr.get_open_positions():
         save_position(pos)
 
-    # 5. Check for new signal (always, regardless of open positions)
+    # 6. Check for new signal (only during strategy hours 07-23 ET)
+    if not is_market_hours():
+        logger.info("Outside strategy hours (07-23 ET) — skipping signal check, positions managed")
+        # Still update bot status below
+        signal = None
+    else:
+        signal = runner.check_last_bar_signal(df)
+
     last_bar_time = get_state("last_signal_bar_time")
-    signal = runner.check_last_bar_signal(df)
 
     if signal and signal["bar_time"] != last_bar_time:
         # Reset blocked list on new day
@@ -210,16 +216,19 @@ def _run_cycle():
         if signal.get("blocked"):
             signal["date"] = today_str
             blocked_signals.append(signal)
+            save_blocked_signal(signal, signal["blocked"])
             save_state("last_signal_bar_time", signal["bar_time"])
             logger.info(f"Signal BLOCKED ({signal['blocked']}): {signal['direction'].upper()} @ {signal['entry_price']:.2f}")
         # Smart DL: block new trades if realized daily P&L <= -$1,100
         # Open positions always run to completion. If P&L recovers, trading resumes.
         elif not pnl_tracker.can_take_trade():
-            signal["blocked"] = f"SmartDL (daily realized ${pnl_tracker.get_today_pnl():+,.0f})"
+            daily_pnl = pnl_tracker.get_today_pnl()
+            signal["blocked"] = f"SmartDL (daily realized ${daily_pnl:+,.0f})"
             signal["date"] = today_str
             blocked_signals.append(signal)
+            save_blocked_signal(signal, signal["blocked"], daily_pnl)
             save_state("last_signal_bar_time", signal["bar_time"])
-            logger.info(f"Signal BLOCKED: Smart DL (daily realized: ${pnl_tracker.get_today_pnl():+,.0f})")
+            logger.info(f"Signal BLOCKED: Smart DL (daily realized: ${daily_pnl:+,.0f})")
         else:
             # Get current account
             stats = get_all_stats()
@@ -230,7 +239,7 @@ def _run_cycle():
             save_state("last_signal_bar_time", signal["bar_time"])
             logger.info(f"Signal TAKEN: {signal['direction'].upper()} @ {signal['entry_price']:.2f} | Open positions: {len(pos_mgr.open_positions)}")
 
-    # 6. Update bot status
+    # 7. Update bot status
     bot_status["last_cycle"] = datetime.now(ET).isoformat()
     bot_status["cycles_count"] += 1
     bot_status["last_error"] = None
@@ -250,6 +259,86 @@ def _run_cycle():
         f"Daily: ${pnl_tracker.get_today_pnl():+,.0f} | "
         f"Status: {pnl_tracker.get_today_status()}"
     )
+
+
+def _save_closed_trade(closed_pos: dict):
+    """Record a closed position to DB and update P&L tracker."""
+    pnl_tracker.record_pnl(closed_pos["total_pnl"], closed_pos.get("entry_time"))
+    save_trade({
+        "id": closed_pos["id"],
+        "direction": closed_pos["direction"],
+        "entry_price": closed_pos["entry_price"],
+        "exit_price": closed_pos.get("exit_price"),
+        "sl_price": closed_pos["sl_price"],
+        "tp_price": closed_pos["tp_price"],
+        "sl_distance": closed_pos["sl_distance"],
+        "entry_time": closed_pos["entry_time"],
+        "exit_time": closed_pos.get("exit_time"),
+        "score": closed_pos["score"],
+        "outcome": closed_pos.get("outcome", ""),
+        "pnl_dollars": closed_pos["total_pnl"],
+        "pnl_points": closed_pos.get("pnl_points", 0),
+        "bars_held": closed_pos.get("bars_held", 0),
+        "contracts": closed_pos.get("contracts", 2),
+        "runner_exit_price": closed_pos.get("runner_exit_price"),
+        "runner_pnl": closed_pos.get("runner_pnl"),
+        "runner_outcome": closed_pos.get("runner_outcome"),
+        "account_after": closed_pos.get("account_after"),
+        "tier": closed_pos.get("tier", 1),
+    })
+    delete_position(closed_pos["id"])
+    logger.info(f"Trade saved to DB: {closed_pos['outcome']} ${closed_pos['total_pnl']:+,.0f}")
+
+
+def _force_close_all_positions(current_price: float):
+    """Force-close all open positions at market (session end).
+
+    This prevents overnight carry — the #1 bug that caused $2,887 loss on 2026-03-12.
+    """
+    from webapp.strategy_runner import POINT_VALUE
+
+    now_str = datetime.now(ET).isoformat()
+    for pos_id in list(pos_mgr.open_positions.keys()):
+        pos = pos_mgr.open_positions[pos_id]
+        direction = pos["direction"]
+        entry = pos["entry_price"]
+        contracts = pos.get("contracts", 2)
+
+        if pos["phase"] == "runner":
+            contracts = 1  # runner = 1 contract
+            # Add TP1 P&L to total
+            tp1_pnl = pos.get("tp1_pnl", 0)
+            if direction == "buy":
+                runner_pnl_pts = current_price - entry
+            else:
+                runner_pnl_pts = entry - current_price
+            runner_pnl = runner_pnl_pts * POINT_VALUE * 1
+            total_pnl = tp1_pnl + runner_pnl
+            pos["runner_exit_price"] = current_price
+            pos["runner_exit_time"] = now_str
+            pos["runner_pnl"] = runner_pnl
+            pos["runner_outcome"] = "session_close"
+        else:
+            if direction == "buy":
+                pnl_pts = current_price - entry
+            else:
+                pnl_pts = entry - current_price
+            total_pnl = pnl_pts * POINT_VALUE * contracts
+            pos["pnl_points"] = pnl_pts
+
+        pos["exit_price"] = current_price
+        pos["exit_time"] = now_str
+        pos["outcome"] = "session_close"
+        pos["total_pnl"] = total_pnl
+        pos["account_after"] = pos.get("account_before", 100000) + total_pnl
+        pos["phase"] = "closed"
+
+        _save_closed_trade(pos)
+        del pos_mgr.open_positions[pos_id]
+        logger.info(
+            f"SESSION CLOSE: {direction.upper()} @ {entry:.2f} -> {current_price:.2f} "
+            f"| P&L: ${total_pnl:+,.0f}"
+        )
 
 
 def _restore_state():
@@ -310,7 +399,7 @@ def dashboard():
 
     # Equity curve data
     equity_data = _build_equity_data(stats.get("trades", []))
-    candle_data = runner.get_recent_candles(120)
+    candle_data = runner.get_recent_candles(500, tf_minutes=1)
 
     # Filter blocked signals for today only
     today_str = datetime.now(ET).strftime("%Y-%m-%d")
@@ -343,7 +432,8 @@ def api_status():
         age = (datetime.now(ET) - runner._last_fetch_time).total_seconds()
         if age > 600:
             runner.fetch_and_run_pipeline()
-    current_price = runner.get_current_price()
+    # Use live price (10s cache) for real-time P&L
+    current_price = runner.get_live_price()
     positions = pos_mgr.get_open_positions()
     unrealized = pos_mgr.get_total_unrealized_pnl(current_price) if current_price and positions else None
 
@@ -383,6 +473,7 @@ def api_status():
         "bot": bot_status,
         "is_market_open": is_market_hours(),
         "blocked_signals": today_blocked,
+        "data_source": runner._data_source,
         "timestamp": datetime.now(ET).isoformat(),
     })
 
@@ -399,10 +490,10 @@ def api_candles():
         runner.fetch_and_run_pipeline()
 
     count = request.args.get("count", 120, type=int)
-    tf = request.args.get("tf", 5, type=int)
-    if tf not in (5, 15, 60):
-        tf = 5
-    candles = runner.get_recent_candles(min(count, 500), tf_minutes=tf)
+    tf = request.args.get("tf", 1, type=int)
+    if tf not in (1, 5, 15, 60):
+        tf = 1
+    candles = runner.get_recent_candles(min(count, 1000), tf_minutes=tf)
     return jsonify(candles)
 
 
@@ -509,6 +600,25 @@ def delete_trade():
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/reset", methods=["POST"])
+def reset_bot():
+    """Full reset: clear all trades, positions, state. Fresh start."""
+    data = request.get_json()
+    if not data or data.get("secret") != "nq_seed_2026":
+        return jsonify({"error": "unauthorized"}), 403
+    from webapp.models import get_db
+    with get_db() as conn:
+        conn.execute("DELETE FROM trades")
+        conn.execute("DELETE FROM positions")
+        conn.execute("DELETE FROM bot_state")
+        conn.execute("DELETE FROM blocked_signals")
+    pos_mgr.open_positions.clear()
+    pnl_tracker.daily_pnl.clear()
+    blocked_signals.clear()
+    logger.info("FULL RESET: All data cleared")
+    return jsonify({"ok": True, "message": "Full reset complete"})
+
+
 @app.route("/api/admin/seed-position", methods=["POST"])
 def seed_position():
     """Seed an active position into the bot (admin only)."""
@@ -534,10 +644,12 @@ def seed_position():
 def main():
     """Start the bot and web server."""
     logger.info("=" * 60)
-    logger.info("  NQ FUTURES PAPER TRADING BOT v3.0 (Multi-Position)")
+    logger.info("  NQ FUTURES PAPER TRADING BOT v4.0 (Databento + Session Close)")
     logger.info("  Strategy: BRK+MTF+VOL | RR 5.0 | Tiered T1+T2")
     logger.info("  T1: SL<=25, 2c (1TP+1R) | T2: SL<=50, 1c (no runner)")
     logger.info("  Smart DL: $1,100 (realized P&L only, recoverable) | Hours: 07-23 ET")
+    logger.info("  SESSION CLOSE: 19:55 ET (no overnight carry)")
+    logger.info("  Data: Databento (CME) primary, YF fallback")
     logger.info("  Multi-position: ENABLED (unlimited concurrent)")
     logger.info("=" * 60)
 

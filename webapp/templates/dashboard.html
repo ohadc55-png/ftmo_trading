@@ -191,7 +191,8 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
     <div class="header-left">
         <div class="header-title">NQ <span>Paper Trader</span> V3</div>
         <div class="tf-pills" id="tfPills">
-            <div class="tf-pill active" data-tf="5" data-label="5m">5m</div>
+            <div class="tf-pill active" data-tf="1" data-label="1m">1m</div>
+            <div class="tf-pill" data-tf="5" data-label="5m">5m</div>
             <div class="tf-pill" data-tf="15" data-label="15m">15m</div>
             <div class="tf-pill" data-tf="60" data-label="1H">1H</div>
         </div>
@@ -201,6 +202,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
             <span class="live-dot {{ 'on' if is_market_open else 'off' }}" id="liveDot"></span>
             <span id="liveText">{{ 'Live' if is_market_open else 'Closed' }}</span>
         </span>
+        <span id="dataSource" style="color:var(--cyan); font-size:11px; font-weight:600"></span>
         <span style="color:var(--muted)">Session US</span>
         <span style="color:var(--muted)">Last {{ now.strftime('%H:%M') }}</span>
         <span class="price-big" id="headerPrice">NQ {{ '{:,.1f}'.format(current_price) if current_price else '---' }}</span>
@@ -434,7 +436,7 @@ tbody tr:hover { background: rgba(36,99,235,0.05); }
 
 <!-- Footer -->
 <div class="footer">
-    NQ Futures Paper Trading Bot v3.0 | Tiered T1+T2 | Multi-Position | Data: Yahoo Finance (5m, 60d) | Auto-refresh: 30s
+    NQ Futures Paper Trading Bot v3.0 | Tiered T1+T2 | Multi-Position | Data: Yahoo Finance (5m, 60d) | Auto-refresh: 10s
 </div>
 
 <!-- ════ Scripts ════ -->
@@ -443,8 +445,10 @@ const equityData = {{ equity_data | safe }};
 const candleData = {{ candle_data | safe }};
 const blockedSignals = {{ blocked_signals | safe }};
 
-// Auto-refresh
+// Auto-refresh (every 10s for near-real-time P&L)
+let _refreshCount = 0;
 setInterval(async () => {
+    _refreshCount++;
     try {
         const r = await fetch('/api/status');
         const d = await r.json();
@@ -496,6 +500,8 @@ setInterval(async () => {
         if (ld) ld.className = 'live-dot ' + (d.is_market_open?'on':'off');
         const lt = document.getElementById('liveText');
         if (lt) lt.textContent = d.is_market_open ? 'Live' : 'Closed';
+        const dSrc = document.getElementById('dataSource');
+        if (dSrc && d.data_source) dSrc.textContent = d.data_source === 'databento' ? 'CME' : 'YF';
 
         // Update blocked signals from server
         if (d.blocked_signals) {
@@ -503,21 +509,8 @@ setInterval(async () => {
             // If no active positions, show blocked + last entry markers
             const activePositions = d.positions || (d.position ? [d.position] : []);
             if (activePositions.length === 0) {
+                // Clean chart — only blocked markers, no position markers
                 const allMarkers = [...getBlockedMarkers()];
-                // Keep last entry markers if we have them
-                for (const lp of _lastKnownPositions) {
-                    if (lp && lp.entry_time) {
-                        const ep = Math.floor(new Date(lp.entry_time).getTime() / 1000) + tzOffsetSec;
-                        const isL = lp.direction === 'buy';
-                        allMarkers.push({
-                            time: ep,
-                            position: isL ? 'belowBar' : 'aboveBar',
-                            color: isL ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)',
-                            shape: isL ? 'arrowUp' : 'arrowDown',
-                            text: (isL ? 'LONG' : 'SHORT') + ' @ ' + lp.entry_price.toFixed(2),
-                        });
-                    }
-                }
                 allMarkers.sort((a, b) => a.time - b.time);
                 markerSeries.setMarkers(allMarkers);
             }
@@ -535,14 +528,16 @@ setInterval(async () => {
         // Update trade history table
         updateTradeHistory(d.trades, d.total_trades);
 
-        // Refresh candle data every cycle
-        await refreshCandles();
+        // Refresh candle data every 6th cycle (~60s) to avoid excessive API calls
+        if (_refreshCount % 6 === 0) {
+            await refreshCandles();
+        }
 
     } catch(e) { console.error('refresh error', e); }
-}, 30000);
+}, 10000);
 
 let _selectedPosId = null;  // currently selected/expanded position
-let _showAllLines = true;   // show all lines on chart
+let _showAllLines = false;  // clean chart by default — lines only on selection
 let _cachedPositions = [];  // cached for chart line updates
 let _cachedPrice = null;
 
@@ -663,8 +658,9 @@ function selectPosition(posId) {
     }
     // Re-render sidebar to update selected state
     updatePositionsSidebar(_cachedPositions, _cachedPrice, null);
-    // Update chart lines to highlight selected
+    // Update chart lines and markers to highlight selected
     highlightPositionLines();
+    updatePositionMarkers();
 }
 
 function toggleShowAll() {
@@ -672,6 +668,7 @@ function toggleShowAll() {
     // Re-render sidebar to update button state
     updatePositionsSidebar(_cachedPositions, _cachedPrice, null);
     highlightPositionLines();
+    updatePositionMarkers();
 }
 
 function highlightPositionLines() {
@@ -686,8 +683,8 @@ function highlightPositionLines() {
 
     positions.forEach((pos, idx) => {
         const isSelected = pos.id === _selectedPosId;
-        // Show this position's lines?
-        const show = _showAllLines || isSelected || !hasSelection;
+        // Show this position's lines only if selected, or ALL is toggled on
+        const show = _showAllLines || isSelected;
         if (!show) return;
 
         const dimmed = hasSelection && !isSelected;
@@ -816,8 +813,8 @@ function updateTradeHistory(trades, totalTrades) {
 }
 
 // ── Interactive Candlestick Chart (TradingView Lightweight Charts) ──
-let currentTF = 5;
-const tfLabels = {5: '5m', 15: '15m', 60: '1H'};
+let currentTF = 1;
+const tfLabels = {1: '1m', 5: '5m', 15: '15m', 60: '1H'};
 
 // Convert UTC epoch to local timezone for display
 const tzOffsetSec = -new Date().getTimezoneOffset() * 60;
@@ -825,6 +822,14 @@ function toLocal(data) {
     return data.map(c => ({
         time: c.time + tzOffsetSec,
         open: c.open, high: c.high, low: c.low, close: c.close,
+        volume: c.volume || 0,
+    }));
+}
+function toVolume(localData) {
+    return localData.map(c => ({
+        time: c.time,
+        value: c.volume || 0,
+        color: c.close >= c.open ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)',
     }));
 }
 
@@ -864,6 +869,16 @@ const candleSeries = chart.addCandlestickSeries({
     wickDownColor: 'rgba(239,68,68,0.6)',
 });
 
+// Volume histogram
+const volumeSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'volume',
+});
+chart.priceScale('volume').applyOptions({
+    scaleMargins: { top: 0.8, bottom: 0 },
+    drawTicks: false,
+});
+
 // Markers series for trade entries
 const markerSeries = chart.addLineSeries({
     color: 'transparent', lineWidth: 0, lastValueVisible: false, priceLineVisible: false,
@@ -871,9 +886,11 @@ const markerSeries = chart.addLineSeries({
 
 // Load initial data
 if (candleData.length > 0) {
-    candleSeries.setData(toLocal(candleData));
+    const localCandles = toLocal(candleData);
+    candleSeries.setData(localCandles);
+    volumeSeries.setData(toVolume(localCandles));
     // Feed marker series same timestamps so markers can be placed
-    markerSeries.setData(toLocal(candleData).map(c => ({time: c.time, value: c.close})));
+    markerSeries.setData(localCandles.map(c => ({time: c.time, value: c.close})));
 }
 
 // Show blocked signal markers on initial load
@@ -898,33 +915,36 @@ function updatePositionLines(positions) {
     // Remember for highlighting
     if (positions.length > 0) _lastKnownPositions = positions.map(p => ({...p}));
 
-    // Entry markers for new positions
-    const markers = [...getBlockedMarkers()];
-    const newIds = new Set();
+    lastPosIds = new Set(positions.map(p => p.id));
 
-    positions.forEach(pos => {
-        newIds.add(pos.id);
-        if (!lastPosIds.has(pos.id) && pos.entry_time) {
-            const entryEpoch = Math.floor(new Date(pos.entry_time).getTime() / 1000) + tzOffsetSec;
-            const isLong = pos.direction === 'buy';
-            markers.push({
-                time: entryEpoch,
-                position: isLong ? 'belowBar' : 'aboveBar',
-                color: isLong ? '#10b981' : '#ef4444',
-                shape: isLong ? 'arrowUp' : 'arrowDown',
-                text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + pos.entry_price.toFixed(2),
-            });
-        }
-    });
-
-    if (markers.length > 0) {
-        markers.sort((a, b) => a.time - b.time);
-        markerSeries.setMarkers(markers);
-    }
-    lastPosIds = newIds;
+    // Update markers based on selection
+    updatePositionMarkers();
 
     // Use the highlight system for lines
     highlightPositionLines();
+}
+
+function updatePositionMarkers() {
+    const markers = [...getBlockedMarkers()];
+
+    // Only show entry markers for the selected position, or all if ALL is on
+    const positions = _cachedPositions || [];
+    positions.forEach(pos => {
+        const show = _showAllLines || pos.id === _selectedPosId;
+        if (!show || !pos.entry_time) return;
+        const entryEpoch = Math.floor(new Date(pos.entry_time).getTime() / 1000) + tzOffsetSec;
+        const isLong = pos.direction === 'buy';
+        markers.push({
+            time: entryEpoch,
+            position: isLong ? 'belowBar' : 'aboveBar',
+            color: isLong ? '#10b981' : '#ef4444',
+            shape: isLong ? 'arrowUp' : 'arrowDown',
+            text: (isLong ? 'LONG' : 'SHORT') + ' @ ' + pos.entry_price.toFixed(2),
+        });
+    });
+
+    markers.sort((a, b) => a.time - b.time);
+    markerSeries.setMarkers(markers);
 }
 
 // ── Blocked signal markers (gray) ──
@@ -996,13 +1016,16 @@ document.getElementById('tfPills').addEventListener('click', async (e) => {
 // Shared candle refresh — called by 30s auto-refresh and TF switch
 async function refreshCandles() {
     try {
-        const r = await fetch('/api/candles?count=120&tf=' + currentTF);
+        const count = currentTF === 1 ? 500 : 120;
+        const r = await fetch('/api/candles?count=' + count + '&tf=' + currentTF);
         const data = await r.json();
         if (data.length > 0) {
             candleData.length = 0;
             data.forEach(c => candleData.push(c));
-            candleSeries.setData(toLocal(candleData));
-            markerSeries.setData(toLocal(candleData).map(c => ({time: c.time, value: c.close})));
+            const localCandles = toLocal(candleData);
+            candleSeries.setData(localCandles);
+            volumeSeries.setData(toVolume(localCandles));
+            markerSeries.setData(localCandles.map(c => ({time: c.time, value: c.close})));
             updateChartInfo();
         }
     } catch(e) {}

@@ -2,13 +2,17 @@
 
 Adapted from forward_test_2026.py — same 3-engine composite scoring,
 cooldown state machine, and simulator.py runner logic.
+
+Data source: Databento (CME/GLBX) for accurate tick-level OHLCV bars.
+Fallback: Yahoo Finance if Databento is unavailable.
 """
 
 import logging
+import os
 import sys
 import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -49,24 +53,91 @@ RUNNER_MAX_BARS = 120
 SL_ATR_MULT = 1.5
 TRAIL_ATR_MULT = 1.5
 
+# Session close: force-close all positions at this time (ET).
+# No overnight carry — trades opened today must close today.
+SESSION_CLOSE_HOUR = 19
+SESSION_CLOSE_MINUTE = 55
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Strategy Runner
 # ═══════════════════════════════════════════════════════════════════════════
 
 class StrategyRunner:
-    """Fetches data from Yahoo Finance and runs the full strategy pipeline."""
+    """Fetches data and runs the full strategy pipeline.
+
+    Data source priority:
+    1. Databento (CME/GLBX) — accurate exchange data, if API key is set
+    2. Yahoo Finance — fallback
+    """
 
     def __init__(self):
         self.cfg = load_config(PROJECT_ROOT / "config" / "settings.yaml")
-        self._last_df: pd.DataFrame | None = None
+        self._last_df: pd.DataFrame | None = None       # 5m pipeline data
+        self._last_df_1m: pd.DataFrame | None = None     # 1m raw candles
         self._last_fetch_time: datetime | None = None
+        self._databento_key = os.environ.get("DATABENTO_API_KEY")
+        self._data_source = "databento" if self._databento_key else "yfinance"
 
-    def fetch_and_run_pipeline(self) -> pd.DataFrame | None:
-        """Fetch 60d of 5m data from Yahoo Finance and run the full pipeline.
+    def _fetch_databento(self) -> pd.DataFrame | None:
+        """Fetch recent 1m bars from Databento and resample to 5m."""
+        try:
+            import databento as db
 
-        Returns the processed DataFrame with signals, or None on failure.
-        """
+            logger.info("Fetching Databento data (NQ, 5d, 1m)...")
+            client = db.Historical(key=self._databento_key)
+
+            # Fetch last 5 days of 1m bars (enough for pipeline warmup)
+            end = datetime.now(ET)
+            start = end - timedelta(days=5)
+
+            data = client.timeseries.get_range(
+                dataset="GLBX.MDP3",
+                symbols=["NQ.v.0"],
+                schema="ohlcv-1m",
+                start=start.strftime("%Y-%m-%dT%H:%M:%S"),
+                end=end.strftime("%Y-%m-%dT%H:%M:%S"),
+                stype_in="continuous",
+            )
+
+            df_1m = data.to_df()
+            if df_1m.empty:
+                logger.warning("Databento returned empty data")
+                return None
+
+            # Normalize
+            df_1m.index = df_1m.index.tz_convert("America/New_York")
+            for col in ["open", "high", "low", "close", "volume"]:
+                if col in df_1m.columns:
+                    df_1m[col] = pd.to_numeric(df_1m[col], errors="coerce")
+
+            # Check if prices need scaling (Databento fixed-point)
+            if df_1m["close"].iloc[-1] > 100000:
+                for col in ["open", "high", "low", "close"]:
+                    df_1m[col] = df_1m[col] / 1e9
+
+            df_1m = df_1m[["open", "high", "low", "close", "volume"]].copy()
+            df_1m = df_1m.dropna(subset=["open", "high", "low", "close"])
+            df_1m["volume"] = df_1m["volume"].fillna(0)
+
+            self._last_df_1m = df_1m.copy()
+            logger.info(f"  Databento: {len(df_1m):,} 1m bars, {df_1m.index[0]} to {df_1m.index[-1]}")
+
+            # Resample to 5m for pipeline
+            df_5m = df_1m.resample("5min").agg({
+                "open": "first", "high": "max", "low": "min",
+                "close": "last", "volume": "sum",
+            }).dropna(subset=["open", "high", "low", "close"])
+
+            logger.info(f"  Resampled to {len(df_5m):,} 5m bars")
+            return df_5m
+
+        except Exception as e:
+            logger.warning(f"Databento fetch failed: {e}")
+            return None
+
+    def _fetch_yfinance(self) -> pd.DataFrame | None:
+        """Fetch 5m bars from Yahoo Finance (fallback)."""
         try:
             logger.info("Fetching Yahoo Finance data (NQ=F, 60d, 5m)...")
             ticker = yf.Ticker("NQ=F")
@@ -76,27 +147,53 @@ class StrategyRunner:
                 logger.error("Yahoo Finance returned empty data")
                 return None
 
-            # Normalize columns
             df = df.rename(columns={
                 "Open": "open", "High": "high", "Low": "low",
                 "Close": "close", "Volume": "volume",
             })
             df = df[["open", "high", "low", "close", "volume"]].copy()
 
-            # Timezone handling
             if df.index.tz is None:
                 df.index = df.index.tz_localize("UTC")
             df.index = df.index.tz_convert("America/New_York")
 
-            # Clean data
             for col in ["open", "high", "low", "close", "volume"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             df = df.dropna(subset=["open", "high", "low", "close"])
             df["volume"] = df["volume"].fillna(0)
 
-            logger.info(f"  Got {len(df):,} bars: {df.index[0]} to {df.index[-1]}")
+            logger.info(f"  YF: {len(df):,} bars, {df.index[0]} to {df.index[-1]}")
 
-            # Run pipeline
+            # Also store as 1m-equivalent for chart (YF 5m bars displayed as-is)
+            self._last_df_1m = df.copy()
+            return df
+
+        except Exception as e:
+            logger.error(f"Yahoo Finance fetch failed: {e}", exc_info=True)
+            return None
+
+    def fetch_and_run_pipeline(self) -> pd.DataFrame | None:
+        """Fetch data and run the full strategy pipeline.
+
+        Returns the processed 5m DataFrame with signals, or None on failure.
+        """
+        try:
+            # Try Databento first, fall back to YF
+            df = None
+            if self._databento_key:
+                df = self._fetch_databento()
+                if df is not None:
+                    self._data_source = "databento"
+
+            if df is None:
+                df = self._fetch_yfinance()
+                if df is not None:
+                    self._data_source = "yfinance"
+
+            if df is None:
+                return None
+
+            # Run pipeline on 5m data
             ecfg = self.cfg.engines
             bt = self.cfg.backtest
 
@@ -113,7 +210,7 @@ class StrategyRunner:
             df = compute_vwap(df, ecfg.vwap)
             df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=bt.atr_period)
 
-            # 3-engine composite scoring (same as V3 / forward_test_2026.py)
+            # 3-engine composite scoring
             mtf_arr = df["mtf_score"].fillna(0).values
             vol_arr = df["vol_score"].fillna(0).values
             lvl_arr = df["levels_score"].fillna(0).values
@@ -150,7 +247,10 @@ class StrategyRunner:
 
             self._last_df = df
             self._last_fetch_time = datetime.now(ET)
-            logger.info(f"  Pipeline complete. Signals: {sig_buy.sum()} buy, {sig_sell.sum()} sell")
+            logger.info(
+                f"  Pipeline complete [{self._data_source}]. "
+                f"Signals: {sig_buy.sum()} buy, {sig_sell.sum()} sell"
+            )
             return df
 
         except Exception as e:
@@ -246,6 +346,28 @@ class StrategyRunner:
             return float(self._last_df.iloc[-1]["close"])
         return None
 
+    def get_live_price(self) -> float | None:
+        """Fast price fetch with 10-second cache. Used for real-time P&L."""
+        now = datetime.now(ET)
+        if (hasattr(self, "_live_price_cache")
+                and self._live_price_cache is not None
+                and hasattr(self, "_live_price_time")
+                and (now - self._live_price_time).total_seconds() < 10):
+            return self._live_price_cache
+
+        try:
+            ticker = yf.Ticker("NQ=F")
+            price = ticker.fast_info.get("lastPrice")
+            if price and price > 0:
+                self._live_price_cache = float(price)
+                self._live_price_time = now
+                return self._live_price_cache
+        except Exception:
+            pass
+
+        # Fallback to cached data
+        return self.get_current_price()
+
     def get_last_bar(self) -> dict | None:
         """Get the latest bar as a dict."""
         if self._last_df is None or len(self._last_df) == 0:
@@ -260,25 +382,29 @@ class StrategyRunner:
             "volume": float(row["volume"]),
         }
 
-    def get_recent_candles(self, count: int = 120, tf_minutes: int = 5) -> list[dict]:
+    def get_recent_candles(self, count: int = 120, tf_minutes: int = 1) -> list[dict]:
         """Get the last N candles for the price chart.
 
         Args:
             count: Number of candles to return.
-            tf_minutes: Timeframe in minutes (5, 15, or 60).
+            tf_minutes: Timeframe in minutes (1, 5, 15, or 60).
         """
-        if self._last_df is None or len(self._last_df) == 0:
+        # For 1m candles, use the raw 1m data if available
+        if tf_minutes == 1 and self._last_df_1m is not None and len(self._last_df_1m) > 0:
+            df = self._last_df_1m.tail(count)
+        elif self._last_df is not None and len(self._last_df) > 0:
+            df = self._last_df
+            if tf_minutes > 5:
+                df = df.resample(f"{tf_minutes}min").agg({
+                    "open": "first", "high": "max", "low": "min",
+                    "close": "last", "volume": "sum",
+                }).dropna()
+            df = df.tail(count)
+        else:
             return []
-        df = self._last_df
-        if tf_minutes > 5:
-            df = df.resample(f"{tf_minutes}min").agg({
-                "open": "first", "high": "max", "low": "min",
-                "close": "last", "volume": "sum",
-            }).dropna()
-        df = df.tail(count)
+
         candles = []
         for ts, row in df.iterrows():
-            # Send UTC epoch seconds — the browser converts to local TZ
             epoch = int(ts.timestamp())
             candles.append({
                 "time": epoch,
@@ -286,8 +412,16 @@ class StrategyRunner:
                 "high": round(float(row["high"]), 2),
                 "low": round(float(row["low"]), 2),
                 "close": round(float(row["close"]), 2),
+                "volume": int(row["volume"]) if "volume" in row.index else 0,
             })
         return candles
+
+    def is_session_close_time(self) -> bool:
+        """Check if current time is at or past session close (19:55 ET)."""
+        now = datetime.now(ET)
+        return now.hour > SESSION_CLOSE_HOUR or (
+            now.hour == SESSION_CLOSE_HOUR and now.minute >= SESSION_CLOSE_MINUTE
+        )
 
 
 def _apply_cooldown(eligible, scores, threshold):
@@ -642,8 +776,16 @@ class DailyPnLTracker:
     def get_today_key(self) -> str:
         return datetime.now(ET).strftime("%Y-%m-%d")
 
-    def record_pnl(self, pnl: float):
-        key = self.get_today_key()
+    def record_pnl(self, pnl: float, entry_time: str | None = None):
+        """Record P&L against the trade's ENTRY date, not exit date.
+
+        Each calendar day starts from $0. A trade that opened on day A
+        and closed on day B counts toward day A's daily loss limit.
+        """
+        if entry_time:
+            key = entry_time[:10]  # "2024-09-18T07:30:00" -> "2024-09-18"
+        else:
+            key = self.get_today_key()
         self.daily_pnl[key] = self.daily_pnl.get(key, 0) + pnl
 
     def can_take_trade(self) -> bool:
