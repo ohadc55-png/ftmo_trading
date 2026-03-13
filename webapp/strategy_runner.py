@@ -11,10 +11,13 @@ import logging
 import os
 import sys
 import uuid
+import warnings
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import numpy as np
 import pandas as pd
@@ -80,51 +83,83 @@ class StrategyRunner:
         self._data_source = "databento" if self._databento_key else "yfinance"
 
     def _fetch_databento(self) -> pd.DataFrame | None:
-        """Fetch recent 1m bars from Databento and resample to 5m."""
+        """Fetch recent 1m bars from Databento and resample to 5m.
+
+        Databento free plan has a ~1 day delay. We fetch up to yesterday
+        from Databento (accurate CME data) and the most recent data from YF.
+        """
         try:
             import databento as db
 
-            logger.info("Fetching Databento data (NQ, 5d, 1m)...")
-            client = db.Historical(key=self._databento_key)
+            now = datetime.now(ET)
+            # End = yesterday to avoid subscription-only data
+            end_dt = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0)
+            start_dt = end_dt - timedelta(days=5)
 
-            # Fetch last 5 days of 1m bars (enough for pipeline warmup)
-            end = datetime.now(ET)
-            start = end - timedelta(days=5)
+            logger.info(f"Fetching Databento data (NQ, {start_dt.strftime('%m/%d')}-{end_dt.strftime('%m/%d')}, 1m)...")
+            client = db.Historical(key=self._databento_key)
 
             data = client.timeseries.get_range(
                 dataset="GLBX.MDP3",
                 symbols=["NQ.v.0"],
                 schema="ohlcv-1m",
-                start=start.strftime("%Y-%m-%dT%H:%M:%S"),
-                end=end.strftime("%Y-%m-%dT%H:%M:%S"),
+                start=start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                end=end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                 stype_in="continuous",
             )
 
-            df_1m = data.to_df()
-            if df_1m.empty:
+            df_db = data.to_df()
+            if df_db.empty:
                 logger.warning("Databento returned empty data")
                 return None
 
-            # Normalize
-            df_1m.index = df_1m.index.tz_convert("America/New_York")
+            df_db.index = df_db.index.tz_convert("America/New_York")
             for col in ["open", "high", "low", "close", "volume"]:
-                if col in df_1m.columns:
-                    df_1m[col] = pd.to_numeric(df_1m[col], errors="coerce")
+                if col in df_db.columns:
+                    df_db[col] = pd.to_numeric(df_db[col], errors="coerce")
 
-            # Check if prices need scaling (Databento fixed-point)
-            if df_1m["close"].iloc[-1] > 100000:
+            if df_db["close"].iloc[-1] > 100000:
                 for col in ["open", "high", "low", "close"]:
-                    df_1m[col] = df_1m[col] / 1e9
+                    df_db[col] = df_db[col] / 1e9
 
-            df_1m = df_1m[["open", "high", "low", "close", "volume"]].copy()
-            df_1m = df_1m.dropna(subset=["open", "high", "low", "close"])
-            df_1m["volume"] = df_1m["volume"].fillna(0)
+            df_db = df_db[["open", "high", "low", "close", "volume"]].copy()
+            df_db = df_db.dropna(subset=["open", "high", "low", "close"])
+            df_db["volume"] = df_db["volume"].fillna(0)
 
-            self._last_df_1m = df_1m.copy()
-            logger.info(f"  Databento: {len(df_1m):,} 1m bars, {df_1m.index[0]} to {df_1m.index[-1]}")
+            logger.info(f"  Databento: {len(df_db):,} 1m bars")
+
+            # Fetch latest day from YF to fill the gap
+            try:
+                ticker = yf.Ticker("NQ=F")
+                yf_df = ticker.history(period="5d", interval="1m")
+                if yf_df is not None and len(yf_df) > 0:
+                    yf_df = yf_df.rename(columns={
+                        "Open": "open", "High": "high", "Low": "low",
+                        "Close": "close", "Volume": "volume",
+                    })
+                    yf_df = yf_df[["open", "high", "low", "close", "volume"]].copy()
+                    if yf_df.index.tz is None:
+                        yf_df.index = yf_df.index.tz_localize("UTC")
+                    yf_df.index = yf_df.index.tz_convert("America/New_York")
+                    for col in ["open", "high", "low", "close", "volume"]:
+                        yf_df[col] = pd.to_numeric(yf_df[col], errors="coerce")
+                    yf_df = yf_df.dropna(subset=["open", "high", "low", "close"])
+                    yf_df["volume"] = yf_df["volume"].fillna(0)
+
+                    # Only use YF data that's newer than Databento
+                    yf_new = yf_df[yf_df.index > df_db.index.max()]
+                    if len(yf_new) > 0:
+                        df_db = pd.concat([df_db, yf_new])
+                        df_db = df_db[~df_db.index.duplicated(keep="last")].sort_index()
+                        logger.info(f"  + {len(yf_new):,} YF 1m bars (gap fill)")
+            except Exception as e:
+                logger.warning(f"YF gap fill failed: {e}")
+
+            self._last_df_1m = df_db.copy()
+            logger.info(f"  Total: {len(df_db):,} 1m bars, {df_db.index[0]} to {df_db.index[-1]}")
 
             # Resample to 5m for pipeline
-            df_5m = df_1m.resample("5min").agg({
+            df_5m = df_db.resample("5min").agg({
                 "open": "first", "high": "max", "low": "min",
                 "close": "last", "volume": "sum",
             }).dropna(subset=["open", "high", "low", "close"])
