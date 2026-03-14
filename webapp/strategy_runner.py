@@ -774,6 +774,42 @@ class PositionManager:
             total += self.get_position_unrealized_pnl(pos, current_price)
         return total
 
+    def force_close_at_market(self, pos_id: str, current_price: float, bar_time: str) -> dict | None:
+        """Force-close a position at current market price (weekend trim)."""
+        pos = self.open_positions.get(pos_id)
+        if not pos:
+            return None
+
+        direction = pos["direction"]
+        entry = pos["entry_price"]
+
+        if pos["phase"] == "runner":
+            # Runner: TP1 already banked, close runner contract at market
+            runner_pts = (current_price - entry) if direction == "buy" else (entry - current_price)
+            runner_pnl = runner_pts * POINT_VALUE * 1
+            pos["runner_exit_price"] = current_price
+            pos["runner_exit_time"] = bar_time
+            pos["runner_pnl"] = runner_pnl
+            pos["runner_outcome"] = "weekend_trim"
+            total_pnl = pos["tp1_pnl"] + runner_pnl
+            outcome = "TP+weekend_trim"
+        else:
+            # Active: close all contracts at market
+            contracts = pos.get("contracts", 2)
+            pnl_pts = (current_price - entry) if direction == "buy" else (entry - current_price)
+            total_pnl = pnl_pts * POINT_VALUE * contracts
+            outcome = "weekend_trim"
+
+        self._close_position(pos, current_price, bar_time, outcome, total_pnl)
+        closed_pos = dict(pos)
+        del self.open_positions[pos_id]
+
+        logger.info(
+            f"WEEKEND TRIM: Closed {direction.upper()} @ {entry:.2f} → {current_price:.2f} | "
+            f"P&L: ${total_pnl:+,.0f} | Remaining: {len(self.open_positions)}"
+        )
+        return closed_pos
+
     def get_worst_case_loss(self) -> float:
         """Sum of max potential loss (SL hit) for all open positions."""
         total = 0.0

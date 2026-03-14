@@ -68,6 +68,26 @@ bot_status = {
 # Background Strategy Loop
 # ═══════════════════════════════════════════════════════════════════════════
 
+WEEKEND_MAX_POSITIONS = 1  # Max positions allowed over the weekend
+FRIDAY_TRIM_HOUR = 16     # Hour ET to start trimming excess positions on Friday
+FRIDAY_TRIM_MINUTE = 50   # Minute to start trimming
+
+
+def is_friday_weekend_block() -> bool:
+    """Check if we should block new signals due to weekend position limit."""
+    now = datetime.now(ET)
+    return now.weekday() == 4  # Friday
+
+
+def is_friday_trim_time() -> bool:
+    """Check if it's time to trim excess positions before Friday close."""
+    now = datetime.now(ET)
+    if now.weekday() != 4:
+        return False
+    return (now.hour > FRIDAY_TRIM_HOUR or
+            (now.hour == FRIDAY_TRIM_HOUR and now.minute >= FRIDAY_TRIM_MINUTE))
+
+
 def is_market_hours() -> bool:
     """Check if within NQ futures trading hours (ET).
 
@@ -186,6 +206,10 @@ def _run_cycle():
         for closed_pos, event in closed_positions:
             _save_closed_trade(closed_pos)
 
+    # 3b. Friday weekend trim: close excess positions before market close
+    if is_friday_trim_time() and len(pos_mgr.open_positions) > WEEKEND_MAX_POSITIONS:
+        _trim_weekend_positions(current_price, last_bar)
+
     # 4. Save all open position states
     for pos in pos_mgr.get_open_positions():
         save_position(pos)
@@ -212,6 +236,15 @@ def _run_cycle():
             save_blocked_signal(signal, signal["blocked"])
             save_state("last_signal_bar_time", signal["bar_time"])
             logger.info(f"Signal BLOCKED ({signal['blocked']}): {signal['direction'].upper()} @ {signal['entry_price']:.2f}")
+        # Weekend limit: block new trades on Friday if already at max positions
+        elif is_friday_weekend_block() and len(pos_mgr.open_positions) >= WEEKEND_MAX_POSITIONS:
+            n_open = len(pos_mgr.open_positions)
+            signal["blocked"] = f"Weekend limit ({n_open} pos open, max {WEEKEND_MAX_POSITIONS})"
+            signal["date"] = today_str
+            blocked_signals.append(signal)
+            save_blocked_signal(signal, signal["blocked"])
+            save_state("last_signal_bar_time", signal["bar_time"])
+            logger.info(f"Signal BLOCKED: Weekend limit ({n_open} positions open, max {WEEKEND_MAX_POSITIONS} on Friday)")
         # Smart DL: block new trades if realized daily P&L <= -$1,100
         # Open positions always run to completion. If P&L recovers, trading resumes.
         elif not pnl_tracker.can_take_trade():
@@ -252,6 +285,31 @@ def _run_cycle():
         f"Daily: ${pnl_tracker.get_today_pnl():+,.0f} | "
         f"Status: {pnl_tracker.get_today_status()}"
     )
+
+
+def _trim_weekend_positions(current_price: float, last_bar: dict):
+    """Trim excess positions before Friday close. Keep earliest entry only."""
+    positions = pos_mgr.get_open_positions()
+    if len(positions) <= WEEKEND_MAX_POSITIONS:
+        return
+
+    # Sort by entry time — keep the earliest
+    sorted_pos = sorted(positions, key=lambda p: p.get("entry_time", ""))
+    keep = sorted_pos[:WEEKEND_MAX_POSITIONS]
+    trim = sorted_pos[WEEKEND_MAX_POSITIONS:]
+
+    keep_ids = {p["id"] for p in keep}
+    bar_time = last_bar.get("time", str(datetime.now(ET))) if last_bar else str(datetime.now(ET))
+
+    logger.info(
+        f"WEEKEND TRIM: {len(trim)} excess position(s) to close "
+        f"(keeping {WEEKEND_MAX_POSITIONS} earliest)"
+    )
+
+    for pos in trim:
+        closed = pos_mgr.force_close_at_market(pos["id"], current_price, bar_time)
+        if closed:
+            _save_closed_trade(closed)
 
 
 def _save_closed_trade(closed_pos: dict):
