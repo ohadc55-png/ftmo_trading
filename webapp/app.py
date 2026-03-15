@@ -207,7 +207,7 @@ def _run_cycle():
             _save_closed_trade(closed_pos)
 
     # 3b. Friday weekend trim: close excess positions before market close
-    if is_friday_trim_time() and len(pos_mgr.open_positions) > WEEKEND_MAX_POSITIONS:
+    if is_friday_trim_time() and len(pos_mgr.open_positions) > WEEKEND_MAX_POSITIONS and current_price:
         _trim_weekend_positions(current_price, last_bar)
 
     # 4. Save all open position states
@@ -295,10 +295,8 @@ def _trim_weekend_positions(current_price: float, last_bar: dict):
 
     # Sort by entry time — keep the earliest
     sorted_pos = sorted(positions, key=lambda p: p.get("entry_time", ""))
-    keep = sorted_pos[:WEEKEND_MAX_POSITIONS]
     trim = sorted_pos[WEEKEND_MAX_POSITIONS:]
 
-    keep_ids = {p["id"] for p in keep}
     bar_time = last_bar.get("time", str(datetime.now(ET))) if last_bar else str(datetime.now(ET))
 
     logger.info(
