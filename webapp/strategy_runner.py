@@ -83,6 +83,10 @@ class StrategyRunner:
 
         Databento free plan has a ~1 day delay. We fetch up to yesterday
         from Databento (accurate CME data) and the most recent data from YF.
+
+        COST OPTIMIZATION: Databento historical data is cached for the day.
+        Since it only covers up to yesterday, there's no reason to re-fetch
+        every 5 minutes. Only the YF gap-fill is refreshed each cycle.
         """
         try:
             import databento as db
@@ -92,37 +96,48 @@ class StrategyRunner:
             end_dt = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0)
             start_dt = end_dt - timedelta(days=5)
 
-            logger.info(f"Fetching Databento data (NQ, {start_dt.strftime('%m/%d')}-{end_dt.strftime('%m/%d')}, 1m)...")
-            client = db.Historical(key=self._databento_key)
+            # Cache Databento data — only fetch once per day
+            cache_key = end_dt.strftime("%Y-%m-%d")
+            if (hasattr(self, "_db_cache_key")
+                    and self._db_cache_key == cache_key
+                    and self._db_cache_df is not None):
+                df_db = self._db_cache_df.copy()
+                logger.info(f"Using cached Databento data ({len(df_db):,} 1m bars)")
+            else:
+                logger.info(f"Fetching Databento data (NQ, {start_dt.strftime('%m/%d')}-{end_dt.strftime('%m/%d')}, 1m)...")
+                client = db.Historical(key=self._databento_key)
 
-            data = client.timeseries.get_range(
-                dataset="GLBX.MDP3",
-                symbols=["NQ.v.0"],
-                schema="ohlcv-1m",
-                start=start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-                end=end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-                stype_in="continuous",
-            )
+                data = client.timeseries.get_range(
+                    dataset="GLBX.MDP3",
+                    symbols=["NQ.v.0"],
+                    schema="ohlcv-1m",
+                    start=start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                    end=end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                    stype_in="continuous",
+                )
 
-            df_db = data.to_df()
-            if df_db.empty:
-                logger.warning("Databento returned empty data")
-                return None
+                df_db = data.to_df()
+                if df_db.empty:
+                    logger.warning("Databento returned empty data")
+                    return None
 
-            df_db.index = df_db.index.tz_convert("America/New_York")
-            for col in ["open", "high", "low", "close", "volume"]:
-                if col in df_db.columns:
-                    df_db[col] = pd.to_numeric(df_db[col], errors="coerce")
+                df_db.index = df_db.index.tz_convert("America/New_York")
+                for col in ["open", "high", "low", "close", "volume"]:
+                    if col in df_db.columns:
+                        df_db[col] = pd.to_numeric(df_db[col], errors="coerce")
 
-            if df_db["close"].iloc[-1] > 100000:
-                for col in ["open", "high", "low", "close"]:
-                    df_db[col] = df_db[col] / 1e9
+                if df_db["close"].iloc[-1] > 100000:
+                    for col in ["open", "high", "low", "close"]:
+                        df_db[col] = df_db[col] / 1e9
 
-            df_db = df_db[["open", "high", "low", "close", "volume"]].copy()
-            df_db = df_db.dropna(subset=["open", "high", "low", "close"])
-            df_db["volume"] = df_db["volume"].fillna(0)
+                df_db = df_db[["open", "high", "low", "close", "volume"]].copy()
+                df_db = df_db.dropna(subset=["open", "high", "low", "close"])
+                df_db["volume"] = df_db["volume"].fillna(0)
 
-            logger.info(f"  Databento: {len(df_db):,} 1m bars")
+                # Cache for the rest of the day
+                self._db_cache_key = cache_key
+                self._db_cache_df = df_db.copy()
+                logger.info(f"  Databento: {len(df_db):,} 1m bars (cached)")
 
             # Fetch latest day from YF to fill the gap
             try:
