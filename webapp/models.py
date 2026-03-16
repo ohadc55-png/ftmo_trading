@@ -11,13 +11,17 @@ from pathlib import Path
 DB_DIR = os.environ.get("DATA_DIR", str(Path(__file__).parent))
 DB_PATH = os.path.join(DB_DIR, "paper_trading.db")
 
+STARTING_CAPITAL = 100_000
+
+# In-memory stats cache — invalidated when a trade is saved/deleted
+_stats_cache: dict | None = None
+
 
 @contextmanager
 def get_db():
     """Thread-safe database connection context manager."""
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     try:
         yield conn
         conn.commit()
@@ -31,6 +35,7 @@ def get_db():
 def init_db():
     """Create tables if they don't exist."""
     with get_db() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS trades (
                 id TEXT PRIMARY KEY,
@@ -98,6 +103,8 @@ def init_db():
 
 def save_trade(trade: dict):
     """Insert a closed trade."""
+    global _stats_cache
+    _stats_cache = None  # Invalidate cache
     with get_db() as conn:
         conn.execute("""
             INSERT OR REPLACE INTO trades
@@ -138,6 +145,20 @@ def save_blocked_signal(signal: dict, reason: str, daily_pnl: float = 0):
         ))
 
 
+def get_blocked_signals_today() -> list[dict]:
+    """Load today's blocked signals from DB."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    with get_db() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM blocked_signals WHERE bar_time LIKE ? ORDER BY bar_time",
+            (f"{today}%",),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_trades(start_date: str = None, end_date: str = None) -> list[dict]:
     """Query trades with optional date filters."""
     with get_db() as conn:
@@ -158,8 +179,8 @@ def get_today_trades(today_str: str) -> list[dict]:
     """Get all trades for a specific date (YYYY-MM-DD)."""
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM trades WHERE entry_time LIKE ? ORDER BY entry_time",
-            (f"{today_str}%",)
+            "SELECT * FROM trades WHERE entry_time >= ? AND entry_time < date(?, '+1 day') ORDER BY entry_time",
+            (today_str, today_str)
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -230,9 +251,13 @@ def get_state(key: str, default=None):
 # ── Stats & Analytics ────────────────────────────────────────────────────
 
 def get_all_stats() -> dict:
-    """Compute comprehensive stats from all trades."""
+    """Compute comprehensive stats from all trades (cached)."""
+    global _stats_cache
+    if _stats_cache is not None:
+        return _stats_cache
     trades = get_trades()
-    return _compute_stats(trades)
+    _stats_cache = _compute_stats(trades)
+    return _stats_cache
 
 
 def get_stats_since(start_date: str) -> dict:
@@ -267,7 +292,7 @@ def _compute_stats(trades: list[dict]) -> dict:
     expectancy = (win_rate / 100 * avg_win) + ((1 - win_rate / 100) * avg_loss)
 
     # Max drawdown
-    capital = 100_000
+    capital = STARTING_CAPITAL
     equity = [capital]
     for p in reversed(pnls):  # trades are DESC, reverse for chronological
         equity.append(equity[-1] + p)

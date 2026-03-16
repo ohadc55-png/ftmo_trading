@@ -490,29 +490,48 @@ def _detect_and_adjust_rollover_gaps(df: pd.DataFrame) -> pd.DataFrame:
 
         minutes_between = (times[i] - times[i - 1]).total_seconds() / 60
 
-        # Adaptive threshold: depends on whether this is a session break
         current_atr = atr_series.iloc[i - 1]
         if pd.isna(current_atr):
             current_atr = 30  # fallback for early bars
 
         if minutes_between > 10:
-            # Session boundary (overnight, weekend, data-source merge)
-            # Only check for rollover gaps during known rollover windows
+            # Session boundary — only check during rollover windows
             if not _is_rollover_window(times[i]):
                 continue
             threshold = max(current_atr * 5, 150)
         else:
-            # Within a session - standard threshold
             threshold = max(current_atr * 3, 100)
 
         if abs(gap) > threshold:
             adjustments.append((i, gap))
             logger.info(
-                f"ROLLOVER GAP DETECTED: {times[i]} | "
+                f"ROLLOVER GAP (inter-bar): {times[i]} | "
                 f"Gap: {gap:+.2f} pts | ATR: {current_atr:.1f} | "
-                f"Threshold: {threshold:.1f} | "
-                f"Session break: {minutes_between > 10}"
+                f"Threshold: {threshold:.1f}"
             )
+
+    # Also detect intra-bar rollover: YF may switch contract WITHIN a bar,
+    # creating a single candle with an abnormally large body (open on old
+    # contract, close on new contract).
+    if not adjustments:
+        highs = df["high"].values
+        lows = df["low"].values
+        for i in range(14, len(df)):
+            body = abs(closes[i] - opens[i])
+            bar_range = highs[i] - lows[i]
+            current_atr = atr_series.iloc[i]
+            if pd.isna(current_atr):
+                continue
+            # Flag if bar body > 4x ATR and we're in a rollover window
+            if body > current_atr * 4 and _is_rollover_window(times[i]):
+                gap = closes[i] - opens[i]
+                adjustments.append((i, gap))
+                logger.info(
+                    f"ROLLOVER GAP (intra-bar): {times[i]} | "
+                    f"Body: {body:.2f} pts | ATR: {current_atr:.1f} | "
+                    f"Range: {bar_range:.2f}"
+                )
+                break  # only one rollover per fetch
 
     # Back-adjust: shift all pre-gap bars by the gap amount
     for gap_idx, gap_amount in adjustments:

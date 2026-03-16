@@ -25,11 +25,11 @@ from webapp.models import (
     init_db, save_trade, get_trades, get_today_trades,
     save_position, get_position, get_positions, delete_position,
     save_state, get_state,
-    get_all_stats, save_blocked_signal,
+    get_all_stats, save_blocked_signal, get_blocked_signals_today,
 )
 from webapp.strategy_runner import (
     StrategyRunner, PositionManager, DailyPnLTracker,
-    POINT_VALUE, TIER1_MAX_SL, TIER2_MAX_SL, SMART_DL,
+    POINT_VALUE, TIER1_MAX_SL, TIER2_MAX_SL, SMART_DL, STARTING_CAPITAL,
 )
 from webapp.email_service import send_weekly_email, send_test_email
 
@@ -62,6 +62,17 @@ bot_status = {
     "cycles_count": 0,
     "start_time": None,
 }
+
+# Thread lock for shared state (pos_mgr, pnl_tracker, blocked_signals, bot_status)
+state_lock = threading.Lock()
+
+# Admin secret from env var (fallback to hardcoded for backward compat)
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "nq_seed_2026")
+
+
+def _check_admin(data) -> bool:
+    """Verify admin secret from request data."""
+    return data and data.get("secret") == ADMIN_SECRET
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -164,6 +175,12 @@ def _wait_for_next_bar():
 
 def _run_cycle():
     """Execute one strategy cycle."""
+    with state_lock:
+        _run_cycle_locked()
+
+
+def _run_cycle_locked():
+    """Execute one strategy cycle (called under state_lock)."""
     logger.info("=" * 50)
     logger.info("Running strategy cycle...")
 
@@ -258,7 +275,7 @@ def _run_cycle():
         else:
             # Get current account
             stats = get_all_stats()
-            account = 100_000 + stats["total_pnl"]
+            account = STARTING_CAPITAL + stats["total_pnl"]
 
             pos = pos_mgr.open_position(signal, account=account)
             save_position(pos)
@@ -356,6 +373,22 @@ def _restore_state():
         pnl_tracker.from_dict(pnl_data)
         logger.info(f"Restored daily P&L: {pnl_tracker.daily_pnl}")
 
+    # Restore today's blocked signals
+    today_blocked = get_blocked_signals_today()
+    for b in today_blocked:
+        blocked_signals.append({
+            "direction": b["direction"],
+            "entry_price": b["entry_price"],
+            "sl_distance": b["sl_distance"],
+            "bar_time": b["bar_time"],
+            "score": b.get("score", 0),
+            "tier": b.get("tier", 1),
+            "blocked": b["reason"],
+            "date": b["bar_time"][:10] if b.get("bar_time") else "",
+        })
+    if today_blocked:
+        logger.info(f"Restored {len(today_blocked)} blocked signal(s) from DB")
+
     # Initial data fetch so dashboard has chart data immediately
     logger.info("Initial data fetch for dashboard...")
     df = runner.fetch_and_run_pipeline()
@@ -390,18 +423,17 @@ def dashboard():
     stats = get_all_stats()
     today = datetime.now(ET).strftime("%Y-%m-%d")
     today_trades = get_today_trades(today)
-    positions = pos_mgr.get_open_positions()
-    position = positions[0] if positions else None  # backward compat for template
-    current_price = runner.get_current_price()
-    unrealized = pos_mgr.get_unrealized_pnl(current_price) if current_price and positions else None
+
+    with state_lock:
+        positions = pos_mgr.get_open_positions()
+        position = positions[0] if positions else None  # backward compat for template
+        current_price = runner.get_current_price()
+        unrealized = pos_mgr.get_unrealized_pnl(current_price) if current_price and positions else None
+        today_blocked = [b for b in blocked_signals if b.get("date") == today]
 
     # Equity curve data
     equity_data = _build_equity_data(stats.get("trades", []))
     candle_data = runner.get_recent_candles(500, tf_minutes=1)
-
-    # Filter blocked signals for today only
-    today_str = datetime.now(ET).strftime("%Y-%m-%d")
-    today_blocked = [b for b in blocked_signals if b.get("date") == today_str]
 
     return render_template("dashboard.html",
         stats=stats,
@@ -413,7 +445,7 @@ def dashboard():
         daily_pnl=pnl_tracker.get_today_pnl(),
         daily_status=pnl_tracker.get_today_status(),
         budget_remaining=pnl_tracker.get_budget_remaining(),
-        bot_status=bot_status,
+        bot_status=dict(bot_status),
         is_market_open=is_market_hours(),
         equity_data=json.dumps(equity_data),
         candle_data=json.dumps(candle_data),
@@ -425,39 +457,41 @@ def dashboard():
 @app.route("/api/status")
 def api_status():
     """JSON endpoint for AJAX auto-refresh."""
-    # Refresh data if stale (>10 min)
-    if runner._last_fetch_time:
-        age = (datetime.now(ET) - runner._last_fetch_time).total_seconds()
-        if age > 600:
-            runner.fetch_and_run_pipeline()
-    # Use live price (10s cache) for real-time P&L
     current_price = runner.get_live_price()
-    positions = pos_mgr.get_open_positions()
-    unrealized = pos_mgr.get_total_unrealized_pnl(current_price) if current_price and positions else None
 
-    # Per-position unrealized
-    positions_with_pnl = []
-    for pos in positions:
-        pos_copy = dict(pos)
-        if current_price:
-            pos_copy["unrealized"] = pos_mgr.get_position_unrealized_pnl(pos, current_price)
-        positions_with_pnl.append(pos_copy)
+    with state_lock:
+        positions = pos_mgr.get_open_positions()
+        unrealized = pos_mgr.get_total_unrealized_pnl(current_price) if current_price and positions else None
+
+        # Per-position unrealized
+        positions_with_pnl = []
+        for pos in positions:
+            pos_copy = dict(pos)
+            if current_price:
+                pos_copy["unrealized"] = pos_mgr.get_position_unrealized_pnl(pos, current_price)
+            positions_with_pnl.append(pos_copy)
+
+        worst_case = pos_mgr.get_worst_case_loss()
+        daily_pnl = pnl_tracker.get_today_pnl()
+        daily_status = pnl_tracker.get_today_status()
+        budget_remaining = pnl_tracker.get_budget_remaining()
+
+        today_str = datetime.now(ET).strftime("%Y-%m-%d")
+        today_blocked = [b for b in blocked_signals if b.get("date") == today_str]
+        status_snapshot = dict(bot_status)
 
     stats = get_all_stats()
-
-    today_str = datetime.now(ET).strftime("%Y-%m-%d")
-    today_blocked = [b for b in blocked_signals if b.get("date") == today_str]
 
     return jsonify({
         "price": current_price,
         "position": positions_with_pnl[0] if positions_with_pnl else None,  # backward compat
         "positions": positions_with_pnl,
-        "positions_count": len(positions),
+        "positions_count": len(positions_with_pnl),
         "unrealized": unrealized,
-        "worst_case_exposure": pos_mgr.get_worst_case_loss(),
-        "daily_pnl": pnl_tracker.get_today_pnl(),
-        "daily_status": pnl_tracker.get_today_status(),
-        "budget_remaining": pnl_tracker.get_budget_remaining(),
+        "worst_case_exposure": worst_case,
+        "daily_pnl": daily_pnl,
+        "daily_status": daily_status,
+        "budget_remaining": budget_remaining,
         "total_pnl": stats["total_pnl"],
         "total_trades": stats["total_trades"],
         "win_rate": stats["win_rate"],
@@ -468,7 +502,7 @@ def api_status():
         "max_consec_wins": stats["max_consec_wins"],
         "max_consec_losses": stats["max_consec_losses"],
         "trades": stats["trades"],
-        "bot": bot_status,
+        "bot": status_snapshot,
         "is_market_open": is_market_hours(),
         "blocked_signals": today_blocked,
         "data_source": runner._data_source,
@@ -479,14 +513,6 @@ def api_status():
 @app.route("/api/candles")
 def api_candles():
     """Return recent candle data for the price chart."""
-    # Refresh data if stale (>10 min) so chart stays alive even outside strategy loop
-    if runner._last_fetch_time:
-        age = (datetime.now(ET) - runner._last_fetch_time).total_seconds()
-        if age > 600:
-            runner.fetch_and_run_pipeline()
-    elif runner._last_df is None:
-        runner.fetch_and_run_pipeline()
-
     count = request.args.get("count", 120, type=int)
     tf = request.args.get("tf", 1, type=int)
     if tf not in (1, 5, 15, 60):
@@ -535,7 +561,7 @@ def health():
 
 def _build_equity_data(trades: list[dict]) -> list[dict]:
     """Build equity curve data for the chart."""
-    capital = 100_000
+    capital = STARTING_CAPITAL
     data = [{"date": "Start", "equity": capital, "pnl": 0}]
 
     for t in trades:
@@ -556,7 +582,7 @@ def _build_equity_data(trades: list[dict]) -> list[dict]:
 def seed_trade():
     """Seed a historical trade into the database (admin only)."""
     data = request.get_json()
-    if not data or "secret" not in data or data["secret"] != "nq_seed_2026":
+    if not _check_admin(data):
         return jsonify({"error": "unauthorized"}), 403
 
     trade = data.get("trade")
@@ -572,15 +598,16 @@ def seed_trade():
 def cleanup_positions():
     """Remove invalid positions from DB and memory (admin only)."""
     data = request.get_json()
-    if not data or data.get("secret") != "nq_seed_2026":
+    if not _check_admin(data):
         return jsonify({"error": "unauthorized"}), 403
     removed = []
-    for pos_id in list(pos_mgr.open_positions.keys()):
-        pos = pos_mgr.open_positions[pos_id]
-        if not pos.get("entry_price") or not pos.get("direction"):
-            del pos_mgr.open_positions[pos_id]
-            delete_position(pos_id)
-            removed.append(pos_id)
+    with state_lock:
+        for pos_id in list(pos_mgr.open_positions.keys()):
+            pos = pos_mgr.open_positions[pos_id]
+            if not pos.get("entry_price") or not pos.get("direction"):
+                del pos_mgr.open_positions[pos_id]
+                delete_position(pos_id)
+                removed.append(pos_id)
     return jsonify({"ok": True, "removed": removed})
 
 
@@ -588,14 +615,16 @@ def cleanup_positions():
 def delete_trade():
     """Delete a trade by ID (admin only)."""
     data = request.get_json()
-    if not data or data.get("secret") != "nq_seed_2026":
+    if not _check_admin(data):
         return jsonify({"error": "unauthorized"}), 403
     trade_id = data.get("trade_id")
     if not trade_id:
         return jsonify({"error": "missing trade_id"}), 400
     from webapp.models import get_db
+    import webapp.models as _models
     with get_db() as conn:
         conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+    _models._stats_cache = None  # Invalidate stats cache
     logger.info(f"Deleted trade: {trade_id}")
     return jsonify({"ok": True})
 
@@ -604,17 +633,20 @@ def delete_trade():
 def reset_bot():
     """Full reset: clear all trades, positions, state. Fresh start."""
     data = request.get_json()
-    if not data or data.get("secret") != "nq_seed_2026":
+    if not _check_admin(data):
         return jsonify({"error": "unauthorized"}), 403
     from webapp.models import get_db
+    import webapp.models as _models
     with get_db() as conn:
         conn.execute("DELETE FROM trades")
         conn.execute("DELETE FROM positions")
         conn.execute("DELETE FROM bot_state")
         conn.execute("DELETE FROM blocked_signals")
-    pos_mgr.open_positions.clear()
-    pnl_tracker.daily_pnl.clear()
-    blocked_signals.clear()
+    _models._stats_cache = None  # Invalidate stats cache
+    with state_lock:
+        pos_mgr.open_positions.clear()
+        pnl_tracker.daily_pnl.clear()
+        blocked_signals.clear()
     logger.info("FULL RESET: All data cleared")
     return jsonify({"ok": True, "message": "Full reset complete"})
 
@@ -623,7 +655,7 @@ def reset_bot():
 def seed_position():
     """Seed an active position into the bot (admin only)."""
     data = request.get_json()
-    if not data or "secret" not in data or data["secret"] != "nq_seed_2026":
+    if not _check_admin(data):
         return jsonify({"error": "unauthorized"}), 403
 
     position = data.get("position")
@@ -631,7 +663,8 @@ def seed_position():
         return jsonify({"error": "missing position data"}), 400
 
     # Add to in-memory position manager AND persist to DB
-    pos_mgr.open_positions[position["id"]] = position
+    with state_lock:
+        pos_mgr.open_positions[position["id"]] = position
     save_position(position)
     logger.info(f"Seeded position: {position['direction']} @ {position['entry_price']} | ID: {position['id']}")
     return jsonify({"ok": True, "position_id": position["id"]})
