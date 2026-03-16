@@ -48,6 +48,7 @@ TIER2_MAX_LOSS = 1000.0 # Max potential loss per Tier 2 trade ($)
 THRESHOLD = 5.0
 SMART_DL = 1100
 POINT_VALUE = 20.0
+STARTING_CAPITAL = 100_000
 EXCLUDE_HOURS = [0, 1, 2, 3, 4, 5, 6]
 SELL_WEIGHTS = np.array([3, 2, 3], dtype=float)  # MTF, VOL, BRK
 BUY_WEIGHTS = np.array([3, 1, 4], dtype=float)   # MTF, VOL, BRK
@@ -150,6 +151,7 @@ class StrategyRunner:
             except Exception as e:
                 logger.warning(f"YF gap fill failed: {e}")
 
+            df_db = _detect_and_adjust_rollover_gaps(df_db)
             self._last_df_1m = df_db.copy()
             logger.info(f"  Total: {len(df_db):,} 1m bars, {df_db.index[0]} to {df_db.index[-1]}")
 
@@ -195,6 +197,7 @@ class StrategyRunner:
             logger.info(f"  YF: {len(df):,} bars, {df.index[0]} to {df.index[-1]}")
 
             # Also store as 1m-equivalent for chart (YF 5m bars displayed as-is)
+            df = _detect_and_adjust_rollover_gaps(df)
             self._last_df_1m = df.copy()
             return df
 
@@ -382,7 +385,7 @@ class StrategyRunner:
         if (hasattr(self, "_live_price_cache")
                 and self._live_price_cache is not None
                 and hasattr(self, "_live_price_time")
-                and (now - self._live_price_time).total_seconds() < 10):
+                and (now - self._live_price_time).total_seconds() < 30):
             return self._live_price_cache
 
         try:
@@ -448,6 +451,78 @@ class StrategyRunner:
 
 
 
+def _is_rollover_window(dt) -> bool:
+    """Check if date falls within a quarterly futures rollover window.
+
+    NQ rolls on the 2nd Thursday before the 3rd Friday of Mar/Jun/Sep/Dec.
+    We use a wide window (day 8-22) to be safe.
+    """
+    return dt.month in (3, 6, 9, 12) and 8 <= dt.day <= 22
+
+
+def _detect_and_adjust_rollover_gaps(df: pd.DataFrame) -> pd.DataFrame:
+    """Detect and back-adjust rollover price gaps in continuous futures data.
+
+    When Yahoo Finance switches from an expiring contract to the next one
+    (quarterly), a sudden price gap appears. This detects such gaps and shifts
+    all pre-gap bars so the series is smooth. Post-gap (current) prices stay real.
+
+    Handles two scenarios:
+    1. Gap within a session (< 10 min between bars) - uses ATR*3 threshold
+    2. Gap at session boundary (overnight/merge point) during rollover window -
+       uses higher ATR*5 threshold to distinguish from normal overnight gaps
+    """
+    if len(df) < 20:
+        return df
+
+    df = df.copy()
+    closes = df["close"].values
+    opens = df["open"].values
+    times = df.index
+
+    # Rolling ATR for adaptive threshold
+    atr_series = ta.atr(df["high"], df["low"], df["close"], length=14)
+
+    # Scan for gaps between consecutive bars (newest-to-oldest)
+    adjustments = []
+    for i in range(len(df) - 1, 0, -1):
+        gap = opens[i] - closes[i - 1]
+
+        minutes_between = (times[i] - times[i - 1]).total_seconds() / 60
+
+        # Adaptive threshold: depends on whether this is a session break
+        current_atr = atr_series.iloc[i - 1]
+        if pd.isna(current_atr):
+            current_atr = 30  # fallback for early bars
+
+        if minutes_between > 10:
+            # Session boundary (overnight, weekend, data-source merge)
+            # Only check for rollover gaps during known rollover windows
+            if not _is_rollover_window(times[i]):
+                continue
+            threshold = max(current_atr * 5, 150)
+        else:
+            # Within a session - standard threshold
+            threshold = max(current_atr * 3, 100)
+
+        if abs(gap) > threshold:
+            adjustments.append((i, gap))
+            logger.info(
+                f"ROLLOVER GAP DETECTED: {times[i]} | "
+                f"Gap: {gap:+.2f} pts | ATR: {current_atr:.1f} | "
+                f"Threshold: {threshold:.1f} | "
+                f"Session break: {minutes_between > 10}"
+            )
+
+    # Back-adjust: shift all pre-gap bars by the gap amount
+    for gap_idx, gap_amount in adjustments:
+        for col in ["open", "high", "low", "close"]:
+            df.iloc[:gap_idx, df.columns.get_loc(col)] -= gap_amount
+        logger.info(f"  Adjusted {gap_idx} bars backward by {gap_amount:+.2f} pts")
+
+    return df
+
+
 def _apply_cooldown(eligible, scores, threshold):
     """Cooldown state machine to prevent signal spam."""
     READY, FIRED, COOLING = 0, 1, 2
@@ -484,7 +559,7 @@ class PositionManager:
 
     def __init__(self):
         self.open_positions: dict[str, dict] = {}  # keyed by position ID
-        self.starting_capital = 100_000.0
+        self.starting_capital = float(STARTING_CAPITAL)
 
     # Backward compat property
     @property
@@ -793,14 +868,14 @@ class PositionManager:
             pos["runner_outcome"] = "weekend_trim"
             total_pnl = pos["tp1_pnl"] + runner_pnl
             outcome = "TP+weekend_trim"
+            self._close_position(pos, current_price, bar_time, outcome, total_pnl)
         else:
             # Active: close all contracts at market
             contracts = pos.get("contracts", 2)
             pnl_pts = (current_price - entry) if direction == "buy" else (entry - current_price)
             total_pnl = pnl_pts * POINT_VALUE * contracts
             outcome = "weekend_trim"
-
-        self._close_position(pos, current_price, bar_time, outcome, total_pnl)
+            self._close_position(pos, current_price, bar_time, outcome, total_pnl, pnl_pts)
         closed_pos = dict(pos)
         del self.open_positions[pos_id]
 
@@ -814,11 +889,19 @@ class PositionManager:
         """Sum of max potential loss (SL hit) for all open positions."""
         total = 0.0
         for pos in self.open_positions.values():
-            sl_dist = pos.get("sl_distance", 0)
-            contracts = pos.get("contracts", 2)
             if pos["phase"] == "runner":
-                contracts = 1  # runner is 1 contract
-            total += sl_dist * POINT_VALUE * contracts
+                # Runner SL is at breakeven or better — worst case is minimal
+                entry = pos["entry_price"]
+                runner_sl = pos.get("runner_sl", entry)
+                if pos["direction"] == "buy":
+                    worst_pts = max(0, entry - runner_sl)
+                else:
+                    worst_pts = max(0, runner_sl - entry)
+                total += worst_pts * POINT_VALUE * 1
+            else:
+                sl_dist = pos.get("sl_distance", 0)
+                contracts = pos.get("contracts", 2)
+                total += sl_dist * POINT_VALUE * contracts
         return total
 
 
@@ -871,6 +954,9 @@ class DailyPnLTracker:
         return self.daily_loss_limit + self.get_today_pnl()
 
     def to_dict(self) -> dict:
+        # Prune entries older than 30 days to prevent unbounded growth
+        cutoff = (datetime.now(ET) - timedelta(days=30)).strftime("%Y-%m-%d")
+        self.daily_pnl = {k: v for k, v in self.daily_pnl.items() if k >= cutoff}
         return {"daily_pnl": self.daily_pnl, "limit": self.daily_loss_limit}
 
     def from_dict(self, data: dict):
