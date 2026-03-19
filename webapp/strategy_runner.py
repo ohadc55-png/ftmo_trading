@@ -50,12 +50,12 @@ SMART_DL = 1100
 POINT_VALUE = 20.0
 STARTING_CAPITAL = 100_000
 EXCLUDE_HOURS = [0, 1, 2, 3, 4, 5, 6]
-SELL_WEIGHTS = np.array([3, 2, 3], dtype=float)  # MTF, VOL, BRK
-BUY_WEIGHTS = np.array([3, 1, 4], dtype=float)   # MTF, VOL, BRK
+SELL_WEIGHTS = np.array([2, 1, 5, 2], dtype=float)  # MTF, VOL, BRK, VWAP
+BUY_WEIGHTS = np.array([2, 1, 5, 2], dtype=float)   # MTF, VOL, BRK, VWAP
 MAX_BARS_HELD = 60
 RUNNER_MAX_BARS = 120
 SL_ATR_MULT = 1.5
-TRAIL_ATR_MULT = 1.5
+TRAIL_ATR_MULT = 0.5
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -258,17 +258,18 @@ class StrategyRunner:
             df = compute_vwap(df, ecfg.vwap)
             df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=bt.atr_period)
 
-            # 3-engine composite scoring
+            # 4-engine composite scoring (MTF + VOL + BRK + VWAP)
             mtf_arr = df["mtf_score"].fillna(0).values
             vol_arr = df["vol_score"].fillna(0).values
             lvl_arr = df["levels_score"].fillna(0).values
+            vwap_arr = df["vwap_score"].fillna(0).values
             direction_arr = df["mtf_direction"].fillna("neutral").values
             bull_mask = (direction_arr == "bull")
             bear_mask = (direction_arr == "bear")
             hour_arr = df.index.hour.values
 
-            scores_map = {"MTF": mtf_arr, "VOL": vol_arr, "BRK": lvl_arr}
-            engines_list = ["MTF", "VOL", "BRK"]
+            scores_map = {"MTF": mtf_arr, "VOL": vol_arr, "BRK": lvl_arr, "VWAP": vwap_arr}
+            engines_list = ["MTF", "VOL", "BRK", "VWAP"]
 
             sell_score = sum(scores_map[e] * SELL_WEIGHTS[i] for i, e in enumerate(engines_list)) / SELL_WEIGHTS.sum()
             sell_score = np.clip(sell_score, 0, 10)
@@ -750,7 +751,11 @@ class PositionManager:
 
             # Start runner phase
             pos["phase"] = "runner"
-            pos["runner_sl"] = entry  # Breakeven
+            sl_dist = pos.get("sl_distance", 0)
+            if direction == "buy":
+                pos["runner_sl"] = entry + sl_dist * 3.0  # Lock SL*3 profit
+            else:
+                pos["runner_sl"] = entry - sl_dist * 3.0  # Lock SL*3 profit
             pos["runner_extreme"] = tp  # Best price = TP level
             pos["runner_trail_dist"] = pos["atr_at_entry"] * TRAIL_ATR_MULT
             pos["runner_bars"] = 0
@@ -965,27 +970,28 @@ class DailyPnLTracker:
             key = self.get_today_key()
         self.daily_pnl[key] = self.daily_pnl.get(key, 0) + pnl
 
-    def can_take_trade(self) -> bool:
+    def can_take_trade(self, unrealized_pnl: float = 0) -> bool:
         """Check if a new trade is allowed under Smart Daily Loss.
 
-        Only checks realized daily P&L. Open positions always run to completion.
-        If realized P&L recovers above the limit, trading resumes.
+        Uses realized + unrealized P&L. Open positions always run to completion.
+        If total P&L recovers above the limit, trading resumes.
         """
-        return self.get_today_pnl() > -self.daily_loss_limit
+        total = self.get_today_pnl() + unrealized_pnl
+        return total > -self.daily_loss_limit
 
     def get_today_pnl(self) -> float:
         return self.daily_pnl.get(self.get_today_key(), 0)
 
-    def get_today_status(self) -> str:
-        pnl = self.get_today_pnl()
+    def get_today_status(self, unrealized_pnl: float = 0) -> str:
+        pnl = self.get_today_pnl() + unrealized_pnl
         if pnl <= -self.daily_loss_limit:
             return "LOCKED"
         elif pnl <= -(self.daily_loss_limit - 200):
             return "WARNING"
         return "OK"
 
-    def get_budget_remaining(self) -> float:
-        return self.daily_loss_limit + self.get_today_pnl()
+    def get_budget_remaining(self, unrealized_pnl: float = 0) -> float:
+        return self.daily_loss_limit + self.get_today_pnl() + unrealized_pnl
 
     def to_dict(self) -> dict:
         # Prune entries older than 30 days to prevent unbounded growth

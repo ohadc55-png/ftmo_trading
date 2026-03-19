@@ -135,7 +135,7 @@ def _build_email_html(stats: dict, week_start: str, week_end: str) -> str:
             <h1 style="color:#58a6ff;margin:0;font-size:24px;">NQ Paper Trading</h1>
             <p style="color:#8b949e;margin:8px 0 0;">Weekly Report: {week_start} to {week_end}</p>
             <p style="color:#8b949e;font-size:12px;margin:4px 0 0;">
-                Tiered T1+T2: BRK+MTF+VOL | RR 5.0 | T1: 2c SL&le;25 + T2: 1c SL&le;50 | SmartDL $1,100
+                Config A [2,1,5,2]: BRK+MTF+VOL+VWAP | RR 5.0 | Trail ATR&times;0.5 | SmartDL $1,100
             </p>
         </div>
 

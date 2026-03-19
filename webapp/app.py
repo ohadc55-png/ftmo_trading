@@ -262,25 +262,28 @@ def _run_cycle_locked():
             save_blocked_signal(signal, signal["blocked"])
             save_state("last_signal_bar_time", signal["bar_time"])
             logger.info(f"Signal BLOCKED: Weekend limit ({n_open} positions open, max {WEEKEND_MAX_POSITIONS} on Friday)")
-        # Smart DL: block new trades if realized daily P&L <= -$1,100
+        # Smart DL: block new trades if (realized + unrealized) daily P&L <= -$1,100
         # Open positions always run to completion. If P&L recovers, trading resumes.
-        elif not pnl_tracker.can_take_trade():
-            daily_pnl = pnl_tracker.get_today_pnl()
-            signal["blocked"] = f"SmartDL (daily realized ${daily_pnl:+,.0f})"
-            signal["date"] = today_str
-            blocked_signals.append(signal)
-            save_blocked_signal(signal, signal["blocked"], daily_pnl)
-            save_state("last_signal_bar_time", signal["bar_time"])
-            logger.info(f"Signal BLOCKED: Smart DL (daily realized: ${daily_pnl:+,.0f})")
         else:
-            # Get current account
-            stats = get_all_stats()
-            account = STARTING_CAPITAL + stats["total_pnl"]
+            unrealized = pos_mgr.get_total_unrealized_pnl(current_price) if current_price and pos_mgr.has_open_position() else 0
+            if not pnl_tracker.can_take_trade(unrealized):
+                realized = pnl_tracker.get_today_pnl()
+                total = realized + unrealized
+                signal["blocked"] = f"SmartDL (realized ${realized:+,.0f} + unrealized ${unrealized:+,.0f} = ${total:+,.0f})"
+                signal["date"] = today_str
+                blocked_signals.append(signal)
+                save_blocked_signal(signal, signal["blocked"], total)
+                save_state("last_signal_bar_time", signal["bar_time"])
+                logger.info(f"Signal BLOCKED: Smart DL (realized: ${realized:+,.0f} + unrealized: ${unrealized:+,.0f} = ${total:+,.0f})")
+            else:
+                # Get current account
+                stats = get_all_stats()
+                account = STARTING_CAPITAL + stats["total_pnl"]
 
-            pos = pos_mgr.open_position(signal, account=account)
-            save_position(pos)
-            save_state("last_signal_bar_time", signal["bar_time"])
-            logger.info(f"Signal TAKEN: {signal['direction'].upper()} @ {signal['entry_price']:.2f} | Open positions: {len(pos_mgr.open_positions)}")
+                pos = pos_mgr.open_position(signal, account=account)
+                save_position(pos)
+                save_state("last_signal_bar_time", signal["bar_time"])
+                logger.info(f"Signal TAKEN: {signal['direction'].upper()} @ {signal['entry_price']:.2f} | Open positions: {len(pos_mgr.open_positions)}")
 
     # 6. Update bot status
     bot_status["last_cycle"] = datetime.now(ET).isoformat()
@@ -297,10 +300,11 @@ def _run_cycle_locked():
         unr = pos_mgr.get_total_unrealized_pnl(current_price) if current_price else 0
         pos_str = f"{n_pos} positions open, unrealized: ${unr:+,.0f}, exposure: ${pos_mgr.get_worst_case_loss():,.0f}"
 
+    unr_total = pos_mgr.get_total_unrealized_pnl(current_price) if current_price and pos_mgr.has_open_position() else 0
     logger.info(
         f"Cycle #{bot_status['cycles_count']} | NQ {price_str} | {pos_str} | "
-        f"Daily: ${pnl_tracker.get_today_pnl():+,.0f} | "
-        f"Status: {pnl_tracker.get_today_status()}"
+        f"Daily: ${pnl_tracker.get_today_pnl():+,.0f} realized + ${unr_total:+,.0f} unrealized | "
+        f"Status: {pnl_tracker.get_today_status(unr_total)}"
     )
 
 
@@ -443,8 +447,8 @@ def dashboard():
         unrealized=unrealized,
         today_trades=today_trades,
         daily_pnl=pnl_tracker.get_today_pnl(),
-        daily_status=pnl_tracker.get_today_status(),
-        budget_remaining=pnl_tracker.get_budget_remaining(),
+        daily_status=pnl_tracker.get_today_status(unrealized or 0),
+        budget_remaining=pnl_tracker.get_budget_remaining(unrealized or 0),
         bot_status=dict(bot_status),
         is_market_open=is_market_hours(),
         equity_data=json.dumps(equity_data),
@@ -473,8 +477,9 @@ def api_status():
 
         worst_case = pos_mgr.get_worst_case_loss()
         daily_pnl = pnl_tracker.get_today_pnl()
-        daily_status = pnl_tracker.get_today_status()
-        budget_remaining = pnl_tracker.get_budget_remaining()
+        unr_for_dl = unrealized or 0
+        daily_status = pnl_tracker.get_today_status(unr_for_dl)
+        budget_remaining = pnl_tracker.get_budget_remaining(unr_for_dl)
 
         today_str = datetime.now(ET).strftime("%Y-%m-%d")
         today_blocked = [b for b in blocked_signals if b.get("date") == today_str]
@@ -534,8 +539,8 @@ def trades_page():
         unrealized=None,
         today_trades=[],
         daily_pnl=pnl_tracker.get_today_pnl(),
-        daily_status=pnl_tracker.get_today_status(),
-        budget_remaining=pnl_tracker.get_budget_remaining(),
+        daily_status=pnl_tracker.get_today_status(0),
+        budget_remaining=pnl_tracker.get_budget_remaining(0),
         bot_status=bot_status,
         is_market_open=is_market_hours(),
         equity_data=json.dumps(_build_equity_data(stats.get("trades", []))),
@@ -677,10 +682,10 @@ def seed_position():
 def main():
     """Start the bot and web server."""
     logger.info("=" * 60)
-    logger.info("  NQ FUTURES PAPER TRADING BOT v4.1 (Databento)")
-    logger.info("  Strategy: BRK+MTF+VOL | RR 5.0 | Tiered T1+T2")
-    logger.info("  T1: SL<=25, 2c (1TP+1R) | T2: SL<=50, 1c (no runner)")
-    logger.info("  Smart DL: $1,100 (realized P&L only, recoverable) | Hours: 07-23 ET")
+    logger.info("  NQ FUTURES PAPER TRADING BOT v5.0 (Config A)")
+    logger.info("  Strategy: BRK+MTF+VOL+VWAP [2,1,5,2] | RR 5.0 | Tiered T1+T2")
+    logger.info("  T1: SL<=25, 2c (1TP+1R) trail ATR*0.5, runner SL*3 | T2: SL<=50, 1c")
+    logger.info("  Smart DL: $1,100 (realized+unrealized) | Hours: 07-23 ET")
     logger.info("  Trades run to natural exit (SL/TP/timeout) — no force close")
     logger.info("  Data: Databento (CME) primary, YF fallback")
     logger.info("  Multi-position: ENABLED (unlimited concurrent)")
